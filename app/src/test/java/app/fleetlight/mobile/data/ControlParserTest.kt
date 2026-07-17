@@ -25,10 +25,11 @@ class ControlParserTest {
               "activeJobId":"job-a",
               "capabilities":[{
                 "hostId":"host-a","hostName":"Workstation","state":"online",
-                "actions":["codex-cli","codex-mac-app"],
+                "actions":["codex-cli","codex-mac-app","restart-linux"],
                 "codexCliUpdateAvailable":true,
                 "codexMacAppUpdateAvailable":false,
-                "linuxUpdateAvailable":false
+                "linuxUpdateAvailable":false,
+                "restartRequired":true
               }],
               "recentJobs":[]
             }""",
@@ -36,8 +37,9 @@ class ControlParserTest {
         assertTrue(status.commandAuthorityEnabled)
         assertTrue(status.jobJournalAvailable)
         assertTrue(status.busy)
-        assertEquals(setOf(ControlAction.CODEX_CLI, ControlAction.CODEX_MAC_APP), status.actions)
+        assertEquals(setOf(ControlAction.CODEX_CLI, ControlAction.CODEX_MAC_APP, ControlAction.RESTART_LINUX), status.actions)
         assertTrue(status.capabilities.single().codexCliUpdateAvailable)
+        assertTrue(status.capabilities.single().restartRequired)
 
         val job = parser.job(
             """{
@@ -69,5 +71,55 @@ class ControlParserTest {
     @Test
     fun parsesNestedErrorMessage() {
         assertEquals("Controller busy", parser.errorMessage("""{"error":{"code":"busy","message":"Controller busy"}}"""))
+    }
+
+    @Test
+    fun mapsRestartWaitPhases() {
+        listOf(
+            "issuing" to ControlTargetState.ISSUING,
+            "waitingForOffline" to ControlTargetState.WAITING_FOR_OFFLINE,
+            "waitingForOnline" to ControlTargetState.WAITING_FOR_ONLINE,
+            "verifying" to ControlTargetState.VERIFYING,
+        ).forEach { (phase, expected) ->
+            val job = parser.job(
+                """{"id":"job-a","action":"restart-linux","targetHostIds":["host-a"],"state":"running","progress":[{"hostId":"host-a","phase":"$phase"}]}""",
+                ControlAction.RESTART_LINUX,
+            )
+            assertEquals(expected, job.targets.single().state)
+        }
+    }
+
+    @Test
+    fun rejectsAvailableOperationsWithoutMatchingSupportAction() {
+        listOf(
+            "\"codexCliUpdateAvailable\":true" to "Codex CLI",
+            "\"codexMacAppUpdateAvailable\":true" to "Codex Mac app",
+            "\"linuxUpdateAvailable\":true" to "Linux OS",
+            "\"restartRequired\":true" to "Linux restart",
+        ).forEach { (field, label) ->
+            val error = assertThrows(ControlProtocolException::class.java) {
+                parser.status(
+                    """{"controllerId":"controller-a","commandAuthorityEnabled":true,"capabilities":[{"hostId":"host-a","actions":[],${field}}]}""",
+                )
+            }
+            assertTrue(error.message.orEmpty().contains(label))
+        }
+    }
+
+    @Test
+    fun enrichesRecentProgressWithFriendlyCapabilityName() {
+        val status = parser.status(
+            """{
+              "controllerId":"controller-a","commandAuthorityEnabled":true,
+              "capabilities":[{"hostId":"host-a","hostName":"Studio Linux","actions":["restart-linux"],"restartRequired":true}],
+              "recentJobs":[{
+                "id":"job-a","requestId":"00000000-0000-0000-0000-000000000001",
+                "action":"restart-linux","targetHostIds":["host-a"],"state":"running",
+                "progress":[{"hostId":"host-a","phase":"waitingForOnline"}]
+              }]
+            }""",
+        )
+
+        assertEquals("Studio Linux", status.recentJobs.single().targets.single().hostName)
     }
 }

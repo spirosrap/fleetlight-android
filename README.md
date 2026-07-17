@@ -1,6 +1,6 @@
 # Fleetlight for Android
 
-Fleetlight is a fast Android companion for the Fleetlight macOS fleet monitor. It shows current machine health, simultaneous issue types, update status, incidents, and recent metrics. An explicitly paired controller can also initiate allowlisted Codex CLI, Codex Mac app, and Linux OS update jobs without placing SSH keys or administrative credentials on the phone.
+Fleetlight is a fast Android companion for the Fleetlight macOS fleet monitor. It shows current machine health, simultaneous issue types, update status, incidents, and recent metrics. An explicitly paired controller can also initiate allowlisted Codex CLI, Codex Mac app, and Linux OS update jobs or restart an eligible Linux machine without placing SSH keys or administrative credentials on the phone.
 
 This repository is the sanitized public edition. It contains no fleet names, addresses, endpoint defaults, tailnet details, device identifiers, or private credentials.
 
@@ -9,15 +9,16 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - Native Kotlin and Jetpack Compose Material 3 interface with light, dark, and dynamic color
 - Issue-first Fleet view with separate Offline, Slow, Access, Alert, Update, and Restart signals
 - Per-machine details for latency, health, resources, services, warnings, software versions, and restart status
-- Codex CLI, Codex Mac app, and Linux OS updates per machine or sequentially across all eligible machines
-- Exact confirmation before every update, durable job progress, partial-result reporting, and idempotent recovery
+- Always-visible per-machine installed versions and availability for Codex CLI, Codex Mac app, and Linux OS, with individual Install or Update controls
+- Sequential Update all for eligible updates, plus Linux restart controls that intentionally operate on exactly one machine at a time
+- Exact confirmation before every update or restart, durable job progress, partial-result reporting, and idempotent recovery
 - Read-only status and Events remain available without command pairing
 - Up to four runtime-configured HTTPS endpoints; the freshest valid schema 1 response wins
 - Automatic refresh every 60 seconds, manual refresh, atomic last-good caching, and clear stale/offline state
 - `fleetlight://configure` endpoint links without compiling private addresses into the app
 - Optional stable release signing from an ignored properties file or environment variables
 
-- Version: **1.1.0 (2)**
+- Version: **1.2.0 (3)**
 - Application ID: `app.fleetlight.mobile`
 - Minimum Android: 8.0 / API 26
 - Compile and target SDK: 36
@@ -40,7 +41,7 @@ Enable Android command authority in Fleetlight on the observer Mac and generate 
 
 The app derives the same-origin control route while preserving the feed prefix: `/fleetlight/mobile-feed.json` becomes `/fleetlight/control/v1`. The paired controller is pinned independently from whichever observer supplies the freshest status feed, so feed failover never redirects a command.
 
-Each update sends one fixed action (`codex-cli`, `codex-mac-app`, or `linux-os`) and an exact list of eligible machine IDs. “Update all” is one server-side sequential job. A UUID request is persisted before submission; if a response is lost, recovery uses the same idempotency key rather than creating a second job.
+Each update sends one fixed action (`codex-cli`, `codex-mac-app`, or `linux-os`) and an exact list of eligible machine IDs. “Update all” is one server-side sequential job. A Linux restart uses the separate `restart-linux` action and is accepted only for exactly one machine that currently reports restart required; there is deliberately no restart-all control. Before restarting, Fleetlight names the target and warns that active work and services will be interrupted while the controller waits for the machine to go offline and return. A UUID request is persisted before submission; if a response is lost, recovery uses the same idempotency key rather than creating a second job.
 
 ## Feed contract
 
@@ -100,7 +101,7 @@ Then run `./gradlew assembleRelease`. The release task fails if stable signing i
 
 Fleet status uses credential-free HTTPS snapshots. Update control is optional and requires an explicit pairing confirmation. The resulting scoped bearer is encrypted with AES-GCM using a non-exportable Android Keystore key, bound to the exact controller base and controller identity, and excluded from Android backups. Control requests reject redirects and never fail over to another observer. The Mac accepts only known action enums and machine IDs; it retains all SSH keys, sudo access, package commands, and raw command output.
 
-Every update requires an exact in-app confirmation. Controls are disabled for cached or unavailable feeds, unpaired controllers, ineligible targets, and while a controller job is busy. Pairing codes are single-use and server-enforced with a short expiry and attempt limit. **Forget controller on this phone** removes the local encrypted credential; revoke the Android device in Fleetlight on the Mac to invalidate the server-side token.
+Every update and restart requires an exact in-app confirmation. Restart is independently constrained to one eligible Linux machine, with no fleet-wide restart action. Controls are disabled for cached or unavailable feeds, unpaired controllers, ineligible targets, and while a controller job is busy. Pairing codes are single-use and server-enforced with a short expiry and attempt limit. **Forget controller on this phone** removes the local encrypted credential; revoke the Android device in Fleetlight on the Mac to invalidate the server-side token.
 
 The privacy check rejects common secrets, private/tailnet addressing, home-directory paths, tailnet domains, keystores, runtime feeds, and endpoint configuration. GitHub Actions runs the privacy gate, unit tests, lint, and a debug build for every change.
 

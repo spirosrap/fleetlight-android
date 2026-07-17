@@ -43,10 +43,23 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
                 codexCliUpdateAvailable = value.boolean("codexCliUpdateAvailable") ?: false,
                 codexMacAppUpdateAvailable = value.boolean("codexMacAppUpdateAvailable") ?: false,
                 linuxUpdateAvailable = value.boolean("linuxUpdateAvailable") ?: false,
+                restartRequired = value.boolean("restartRequired") ?: false,
             )
         }
         if (authorityEnabled && capabilities.isEmpty()) {
             throw ControlProtocolException("Control status did not include capabilities")
+        }
+        capabilities.forEach { capability ->
+            val inconsistent = when {
+                capability.codexCliUpdateAvailable && ControlAction.CODEX_CLI !in capability.actions -> "Codex CLI"
+                capability.codexMacAppUpdateAvailable && ControlAction.CODEX_MAC_APP !in capability.actions -> "Codex Mac app"
+                capability.linuxUpdateAvailable && ControlAction.LINUX_OS !in capability.actions -> "Linux OS"
+                capability.restartRequired && ControlAction.RESTART_LINUX !in capability.actions -> "Linux restart"
+                else -> null
+            }
+            if (inconsistent != null) {
+                throw ControlProtocolException("Controller reported inconsistent $inconsistent capability status")
+            }
         }
         val recentJobs = root.arrayValue("recentJobs").mapNotNull { element ->
             val value = element as? JsonObject ?: return@mapNotNull null
@@ -62,7 +75,7 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
             capabilities = capabilities,
             busy = root.boolean("busy") ?: false,
             activeJobId = root.text("activeJobId"),
-            recentJobs = recentJobs,
+            recentJobs = recentJobs.map { it.withCapabilityNames(capabilities) },
         )
     }
 

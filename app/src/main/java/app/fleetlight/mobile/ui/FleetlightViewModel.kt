@@ -17,6 +17,9 @@ import app.fleetlight.mobile.data.ControlStatus
 import app.fleetlight.mobile.data.DeviceIdentityStore
 import app.fleetlight.mobile.data.EndpointPolicy
 import app.fleetlight.mobile.data.EndpointStore
+import app.fleetlight.mobile.data.eligibleFor
+import app.fleetlight.mobile.data.safeHostName
+import app.fleetlight.mobile.data.withCapabilityNames
 import app.fleetlight.mobile.data.FeedRefreshResult
 import app.fleetlight.mobile.data.FeedRepository
 import app.fleetlight.mobile.data.FileFeedCache
@@ -202,22 +205,31 @@ class FleetlightViewModel(
             return
         }
         if (status.busy || current.activeJob?.state?.isTerminal == false || jobStore.read() != null) {
-            mutableState.value = current.copy(controlError = "Another fleet update is already active")
+            mutableState.value = current.copy(controlError = "Another fleet operation is already active")
             return
         }
         val requested = hostIds.distinct()
-        val eligible = status.capabilities.filter { capability ->
-            capability.hostId in requested && capability.actions.contains(action) && capability.updateAvailable(action)
+        if (action.requiresExactlyOneTarget && requested.size != 1) {
+            mutableState.value = current.copy(controlError = "Restart exactly one Linux machine at a time")
+            return
         }
-        if (eligible.isEmpty()) {
-            mutableState.value = current.copy(controlError = "No selected machine has this update available")
+        val eligible = status.capabilities.filter { capability ->
+            capability.hostId in requested && capability.eligibleFor(action)
+        }
+        if (eligible.isEmpty() || (action.requiresExactlyOneTarget && eligible.size != 1)) {
+            val message = if (action == ControlAction.RESTART_LINUX) {
+                "That machine does not currently require a Linux restart"
+            } else {
+                "No selected machine has this update available"
+            }
+            mutableState.value = current.copy(controlError = message)
             return
         }
         mutableState.value = current.copy(
             pendingControlAction = PendingControlAction(
                 action = action,
                 targetHostIds = eligible.map { it.hostId },
-                targetHostNames = eligible.map { it.hostName },
+                targetHostNames = eligible.map { it.safeHostName() },
             ),
             controlError = null,
         )
@@ -229,6 +241,13 @@ class FleetlightViewModel(
 
     fun confirmPendingUpdate() {
         val pending = mutableState.value.pendingControlAction ?: return
+        if (pending.action.requiresExactlyOneTarget && pending.targetHostIds.size != 1) {
+            mutableState.value = mutableState.value.copy(
+                pendingControlAction = null,
+                jobError = "The restart was blocked because it did not target exactly one machine",
+            )
+            return
+        }
         val endpoint = mutableState.value.controlEndpoint ?: return
         val controlBase = ControlEndpointPolicy.baseForFeed(endpoint) ?: return
         val stored = StoredControlJob(
@@ -316,6 +335,7 @@ class FleetlightViewModel(
                     }
                 }
             }
+            accepted = decorateJob(accepted)
             val bound = stored.copy(jobId = accepted.id)
             val persistenceWarning = if (jobStore.write(bound)) null else
                 "The job started, but its id could not be saved; recovery will use the original request id"
@@ -370,7 +390,7 @@ class FleetlightViewModel(
                 delayMillis = (delayMillis * 2).coerceAtMost(MAX_JOB_POLL_MILLIS)
                 continue
             }
-            job = refreshed
+            job = decorateJob(refreshed)
             delayMillis = JOB_POLL_MILLIS
             mutableState.value = mutableState.value.copy(activeJob = job, jobError = null)
         }
@@ -421,7 +441,7 @@ class FleetlightViewModel(
                                     jobError = "Active job progress is visible but could not be saved for restart recovery",
                                 )
                             }
-                            mutableState.value = mutableState.value.copy(activeJob = job)
+                            mutableState.value = mutableState.value.copy(activeJob = decorateJob(job))
                             resumeStoredJob(stored)
                         }
                     }
@@ -456,6 +476,9 @@ class FleetlightViewModel(
             )
         }
     }
+
+    private fun decorateJob(job: ControlJob): ControlJob =
+        job.withCapabilityNames(mutableState.value.controlStatus?.capabilities.orEmpty())
 
     private fun applySuccess(result: FeedRefreshResult.Success) {
         val stale = Duration.between(result.feed.generatedAt, now()).let { it.isNegative.not() && it > STALE_AFTER }
@@ -507,12 +530,6 @@ class FleetlightViewModel(
                 override fun <T : ViewModel> create(modelClass: Class<T>): T = FleetlightViewModel(application) as T
             }
     }
-}
-
-private fun app.fleetlight.mobile.data.ControlCapability.updateAvailable(action: ControlAction): Boolean = when (action) {
-    ControlAction.CODEX_CLI -> codexCliUpdateAvailable
-    ControlAction.CODEX_MAC_APP -> codexMacAppUpdateAvailable
-    ControlAction.LINUX_OS -> linuxUpdateAvailable
 }
 
 private fun safeMessage(error: Throwable, fallback: String): String = error.message

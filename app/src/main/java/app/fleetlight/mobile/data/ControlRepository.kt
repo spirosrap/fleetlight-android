@@ -52,6 +52,7 @@ class ControlRepository(
             credentials.remove(session.authority)
             throw ControlProtocolException("The paired observer identity changed; pair it again")
         }
+        status.recentJobs.forEach(::validateTargetCount)
         return status
     }
 
@@ -64,6 +65,9 @@ class ControlRepository(
         require(runCatching { UUID.fromString(requestId) }.isSuccess) { "requestId must be a UUID" }
         val targets = targetHostIds.map(String::trim).filter(String::isNotEmpty).distinct()
         require(targets.isNotEmpty()) { "At least one target is required" }
+        require(!action.requiresExactlyOneTarget || targets.size == 1) {
+            "${action.title} must target exactly one machine"
+        }
         val session = session(endpoint)
         val url = requireNotNull(ControlEndpointPolicy.route(endpoint, "jobs"))
         val body = buildJsonObject {
@@ -84,6 +88,7 @@ class ControlRepository(
             if (job.action != action || job.requestId != requestId || job.targetHostIds != targets) {
                 throw ControlProtocolException("Controller returned a mismatched job")
             }
+            validateTargetCount(job)
         }
     }
 
@@ -107,6 +112,7 @@ class ControlRepository(
             ) {
                 throw ControlProtocolException("Controller returned a mismatched job")
             }
+            validateTargetCount(job)
         }
     }
 
@@ -128,6 +134,7 @@ class ControlRepository(
             ) {
                 throw ControlProtocolException("Controller returned a mismatched job")
             }
+            validateTargetCount(job)
         }
     }
 
@@ -142,6 +149,12 @@ class ControlRepository(
             ?: throw ControlProtocolException("Control endpoint is invalid")
         return credentials.read(authority)?.takeIf { it.controlBase == expectedBase }
             ?: throw ControlProtocolException("Pair this observer before starting updates")
+    }
+
+    private fun validateTargetCount(job: ControlJob) {
+        if (job.action.requiresExactlyOneTarget && job.targetHostIds.size != 1) {
+            throw ControlProtocolException("Controller returned an invalid multi-machine restart")
+        }
     }
 
     private companion object {

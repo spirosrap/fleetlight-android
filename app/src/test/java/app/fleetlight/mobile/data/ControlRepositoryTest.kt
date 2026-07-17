@@ -66,6 +66,39 @@ class ControlRepositoryTest {
         }
     }
 
+    @Test
+    fun restartUsesDedicatedActionAndExactlyOneTarget() = runTest {
+        val transport = QueueTransport(
+            mutableListOf(jobJson(requestId, "restart-linux", listOf("host-a"))),
+        )
+        val repository = ControlRepository(transport, pairedCredentials())
+
+        repository.createJob(endpoint, ControlAction.RESTART_LINUX, listOf("host-a"), requestId)
+
+        val request = transport.requests.single()
+        assertTrue(request.body.orEmpty().contains("\"action\":\"restart-linux\""))
+        assertTrue(request.body.orEmpty().contains("\"targetHostIds\":[\"host-a\"]"))
+        assertEquals(requestId, request.idempotencyKey)
+    }
+
+    @Test
+    fun refusesRestartWithMoreThanOneTargetBeforeNetwork() = runTest {
+        val transport = QueueTransport(mutableListOf())
+        val repository = ControlRepository(transport, pairedCredentials())
+
+        assertThrows(IllegalArgumentException::class.java) {
+            kotlinx.coroutines.runBlocking {
+                repository.createJob(
+                    endpoint,
+                    ControlAction.RESTART_LINUX,
+                    listOf("host-a", "host-b"),
+                    requestId,
+                )
+            }
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
     private fun pairedCredentials() = MemoryCredentials(
         ControlSession(
             authority = "observer.example",

@@ -42,6 +42,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -91,6 +92,12 @@ import app.fleetlight.mobile.data.FleetSummary
 import app.fleetlight.mobile.data.HostState
 import app.fleetlight.mobile.data.LinuxUpdate
 import app.fleetlight.mobile.data.MobileFeed
+import app.fleetlight.mobile.data.PendingControlAction
+import app.fleetlight.mobile.data.confirmationCopy
+import app.fleetlight.mobile.data.commandReachable
+import app.fleetlight.mobile.data.eligibleFor
+import app.fleetlight.mobile.data.safeHostName
+import app.fleetlight.mobile.data.updateAvailable
 import app.fleetlight.mobile.ui.theme.FleetlightTheme
 import java.time.Duration
 import java.time.Instant
@@ -228,7 +235,7 @@ fun FleetlightContent(
         PairingConfirmationDialog(pairing.endpoint, onConfirmPairing, onDismissPairing)
     }
     state.pendingControlAction?.let { pending ->
-        UpdateConfirmationDialog(pending.action, pending.targetHostNames, onConfirmUpdate, onDismissUpdate)
+        ControlConfirmationDialog(pending, onConfirmUpdate, onDismissUpdate)
     }
 }
 
@@ -276,33 +283,38 @@ private fun PairingConfirmationDialog(endpoint: String, onConfirm: () -> Unit, o
 }
 
 @Composable
-private fun UpdateConfirmationDialog(
-    action: ControlAction,
-    hostNames: List<String>,
+private fun ControlConfirmationDialog(
+    pending: PendingControlAction,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val warning = when (action) {
-        ControlAction.CODEX_CLI -> "Active Codex CLI sessions may be interrupted."
-        ControlAction.CODEX_MAC_APP -> "The Codex Mac app restarts automatically after updating."
-        ControlAction.LINUX_OS -> "Packages will update sequentially. Machines will not reboot automatically."
-    }
+    val copy = pending.confirmationCopy()
+    val destructive = pending.action == ControlAction.RESTART_LINUX
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Update ${action.title}?") },
+        title = {
+            Text(
+                copy.title,
+                color = if (destructive) MaterialTheme.colorScheme.error else Color.Unspecified,
+            )
+        },
         text = {
-            Column(
+            Text(
+                copy.description,
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text("${hostNames.size} machine${if (hostNames.size == 1) "" else "s"} will update sequentially:")
-                hostNames.forEach { Text("• $it", fontWeight = FontWeight.Medium) }
-                Text(warning, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(if (hostNames.size == 1) "Update ${hostNames.first()}" else "Update all ${hostNames.size}")
+            TextButton(
+                onClick = onConfirm,
+                colors = if (destructive) {
+                    ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                } else {
+                    ButtonDefaults.textButtonColors()
+                },
+            ) {
+                Text(copy.confirmLabel)
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -564,7 +576,7 @@ private fun UpdatesScreen(
         } else if (state.connection != FeedConnection.LIVE) {
             item { ControlMessageCard("Updates are disabled until a live fleet snapshot is available.") }
         }
-        ControlAction.entries.forEach { action ->
+        ControlAction.entries.filter { it.isUpdate }.forEach { action ->
             item {
                 UpdateActionSection(
                     action = action,
@@ -574,6 +586,14 @@ private fun UpdatesScreen(
                     onRequestUpdate = onRequestUpdate,
                 )
             }
+        }
+        item {
+            RestartActionSection(
+                feed = feed,
+                capabilities = state.controlStatus?.capabilities.orEmpty(),
+                enabled = ready,
+                onRequestRestart = onRequestUpdate,
+            )
         }
         item {
             SectionHeading(
@@ -598,8 +618,8 @@ private fun UpdateActionSection(
     enabled: Boolean,
     onRequestUpdate: (ControlAction, List<String>) -> Unit,
 ) {
-    val supported = capabilities.filter { action in it.actions }
-    val available = supported.filter { it.updateAvailable(action) }
+    val supported = capabilities.filter { action in it.actions }.sortedBy { it.hostName.lowercase() }
+    val available = supported.filter { it.eligibleFor(action) }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -608,6 +628,7 @@ private fun UpdateActionSection(
                     Text(
                         when {
                             capabilities.isEmpty() -> "Pair to load eligible machines"
+                            supported.any { it.updateAvailable(action) } && available.isEmpty() -> "Controller check required"
                             available.isEmpty() -> "No update available"
                             else -> "${available.size} update${if (available.size == 1) "" else "s"} available"
                         },
@@ -622,23 +643,102 @@ private fun UpdateActionSection(
                 }
             }
             supported.forEach { capability ->
-                val current = feed.currentVersion(capability.hostId, action)
+                val installed = feed.installedVersion(capability.hostId, action)
+                val unavailable = capability.isUnavailable
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(capability.hostName, fontWeight = FontWeight.SemiBold)
+                        Text(capability.safeHostName(), fontWeight = FontWeight.SemiBold)
                         Text(
-                            listOfNotNull(current, capability.state.takeIf(String::isNotBlank)).joinToString(" · ").ifBlank { "Status unavailable" },
+                            listOf(
+                                installed ?: "Installed version unavailable",
+                                capability.controllerUpdateReport(action),
+                            ).joinToString(" · "),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     FilledTonalButton(
                         onClick = { onRequestUpdate(action, listOf(capability.hostId)) },
-                        enabled = enabled && capability.updateAvailable(action),
+                        enabled = enabled && capability.updateAvailable(action) && !unavailable,
                     ) {
-                        Text(if (capability.updateAvailable(action)) "Update" else "Current")
+                        Text(capability.updateButtonLabel(action, installed))
                     }
                 }
+            }
+            if (supported.isEmpty()) {
+                Text(
+                    if (capabilities.isEmpty()) "Machine status loads after pairing" else "No machines support ${action.title}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            val inconsistent = capabilities.filter { it.updateAvailable(action) && action !in it.actions }
+            if (inconsistent.isNotEmpty()) {
+                Text(
+                    "Controller status is inconsistent for ${inconsistent.joinToString { it.safeHostName() }}. " +
+                        "Refresh or check the controller before updating.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RestartActionSection(
+    feed: MobileFeed,
+    capabilities: List<ControlCapability>,
+    enabled: Boolean,
+    onRequestRestart: (ControlAction, List<String>) -> Unit,
+) {
+    val linuxMachines = capabilities
+        .filter { ControlAction.LINUX_OS in it.actions || ControlAction.RESTART_LINUX in it.actions }
+        .sortedBy { it.hostName.lowercase() }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column {
+                Text("Restart Linux", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    "Restart one machine at a time after reviewing the interruption warning",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            linuxMachines.forEach { capability ->
+                val canRestart = ControlAction.RESTART_LINUX in capability.actions && capability.restartRequired
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(capability.safeHostName(), fontWeight = FontWeight.SemiBold)
+                        Text(
+                            listOf(
+                                feed.installedVersion(capability.hostId, ControlAction.LINUX_OS)
+                                    ?: "Installed version unavailable",
+                                capability.controllerRestartReport,
+                            ).joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    FilledTonalButton(
+                        onClick = { onRequestRestart(ControlAction.RESTART_LINUX, listOf(capability.hostId)) },
+                        enabled = enabled && canRestart && !capability.isUnavailable,
+                    ) {
+                        Text(
+                            when {
+                                capability.isUnavailable || ControlAction.RESTART_LINUX !in capability.actions -> "Unavailable"
+                                capability.restartRequired -> "Restart"
+                                else -> "Not required"
+                            },
+                        )
+                    }
+                }
+            }
+            if (linuxMachines.isEmpty()) {
+                Text(
+                    if (capabilities.isEmpty()) "Machine status loads after pairing" else "No Linux machines support remote restart",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -667,7 +767,7 @@ private fun JobProgressCard(job: ControlJob, error: String?, onDismiss: () -> Un
             }
             job.targets.forEach { target ->
                 Text(
-                    "${target.hostName}: ${target.phase ?: target.state.name.lowercase()}${target.message?.let { " · $it" }.orEmpty()}",
+                    "${target.hostName}: ${target.displayProgress}${target.message?.let { " · $it" }.orEmpty()}",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1007,19 +1107,53 @@ private fun formatDecimal(value: Double): String = if (value == value.roundToInt
     "%.1f".format(value)
 }
 
-private fun ControlCapability.updateAvailable(action: ControlAction): Boolean = when (action) {
-    ControlAction.CODEX_CLI -> codexCliUpdateAvailable
-    ControlAction.CODEX_MAC_APP -> codexMacAppUpdateAvailable
-    ControlAction.LINUX_OS -> linuxUpdateAvailable
+private val ControlCapability.isUnavailable: Boolean
+    get() = !commandReachable
+
+private fun ControlCapability.controllerUpdateReport(action: ControlAction): String = when {
+    state.equals("offline", ignoreCase = true) || state.equals("unreachable", ignoreCase = true) ->
+        "Controller reports offline"
+    isUnavailable -> "Controller check required"
+    updateAvailable(action) -> "Controller reports update available"
+    else -> "Controller reports current"
 }
 
-private fun MobileFeed.currentVersion(hostId: String, action: ControlAction): String? = when (action) {
-    ControlAction.CODEX_CLI -> hosts.firstOrNull { it.id == hostId }?.codexCliVersion?.let { "Current $it" }
-    ControlAction.CODEX_MAC_APP -> hosts.firstOrNull { it.id == hostId }?.codexMacAppVersion?.let { "Current $it" }
-    ControlAction.LINUX_OS -> linuxUpdates.firstOrNull { it.hostId == hostId }?.let {
-        if (it.availableCount > 0) "${it.availableCount} packages" else "Current"
+private val ControlCapability.controllerRestartReport: String
+    get() = when {
+        state.equals("offline", ignoreCase = true) || state.equals("unreachable", ignoreCase = true) ->
+            "Controller reports offline"
+        isUnavailable || ControlAction.RESTART_LINUX !in actions -> "Controller check required"
+        restartRequired -> "Controller reports restart required"
+        else -> "Controller reports restart not required"
     }
+
+private fun ControlCapability.updateButtonLabel(action: ControlAction, installedVersion: String?): String = when {
+    updateAvailable(action) && action != ControlAction.LINUX_OS && installedVersion == null -> "Install"
+    updateAvailable(action) -> "Update"
+    isUnavailable -> "Unavailable"
+    else -> "Current"
 }
+
+private fun MobileFeed.installedVersion(hostId: String, action: ControlAction): String? = when (action) {
+    ControlAction.CODEX_CLI -> hosts.firstOrNull { it.id == hostId }?.codexCliVersion?.let { "Installed $it" }
+    ControlAction.CODEX_MAC_APP -> hosts.firstOrNull { it.id == hostId }?.let { host ->
+        host.codexMacAppVersion?.let { version ->
+            listOfNotNull("Installed $version", host.codexMacAppBuild?.let { "build $it" }).joinToString(" · ")
+        }
+    }
+    ControlAction.LINUX_OS, ControlAction.RESTART_LINUX ->
+        hosts.firstOrNull { it.id == hostId }?.operatingSystem?.let { "Installed $it" }
+}
+
+private val app.fleetlight.mobile.data.ControlJobTarget.displayProgress: String
+    get() = when (state) {
+        app.fleetlight.mobile.data.ControlTargetState.ISSUING -> "Issuing restart"
+        app.fleetlight.mobile.data.ControlTargetState.WAITING_FOR_OFFLINE -> "Waiting to go offline"
+        app.fleetlight.mobile.data.ControlTargetState.WAITING_FOR_ONLINE -> "Waiting to return online"
+        app.fleetlight.mobile.data.ControlTargetState.VERIFYING -> "Verifying"
+        else -> phase?.replace(Regex("([a-z])([A-Z])"), "$1 $2")?.lowercase()
+            ?: state.name.lowercase().replace('_', ' ')
+    }
 
 @Preview(showBackground = true, widthDp = 412, heightDp = 860)
 @Composable

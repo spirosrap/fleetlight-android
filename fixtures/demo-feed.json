@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-01-15T12:00:00Z",
+  "observer": {
+    "id": "primary-observer",
+    "name": "Primary Observer",
+    "appVersion": "1.0"
+  },
+  "summary": {
+    "total": 3,
+    "online": 2,
+    "offline": 1,
+    "slowConnections": 1,
+    "accessIssues": 1,
+    "alerts": 1,
+    "updatesAvailable": 1,
+    "restartRequired": 1
+  },
+  "hosts": [
+    {
+      "id": "design-workstation",
+      "name": "Design Workstation",
+      "platform": "macOS",
+      "status": "online",
+      "checkedAt": "2026-01-15T11:59:55Z",
+      "health": 100,
+      "pingMs": 8,
+      "jitterMs": 1,
+      "packetLossPercent": 0,
+      "sshReadyMs": 160,
+      "fullProbeMs": 490,
+      "diskPercent": 44,
+      "memoryPercent": 61,
+      "loadAverage": 1.2,
+      "bootDescription": "Up for 4 days",
+      "codexCliVersion": "1.0.0",
+      "codexMacAppVersion": "1.0",
+      "codexMacAppBuild": "100",
+      "fleetlightVersion": "1.0",
+      "services": [
+        { "name": "Web service", "state": "running" }
+      ],
+      "warnings": []
+    },
+    {
+      "id": "media-server",
+      "name": "Media Server",
+      "platform": "Linux",
+      "status": "slow",
+      "detail": "Network response is above its normal range",
+      "checkedAt": "2026-01-15T11:59:50Z",
+      "issueTypes": ["slow", "access"],
+      "health": 91,
+      "pingMs": 74,
+      "jitterMs": 7,
+      "packetLossPercent": 0,
+      "restartRequired": true,
+      "warnings": [
+        { "kind": "restart", "title": "Restart required", "detail": "A new kernel is ready." }
+      ]
+    },
+    {
+      "id": "lab-computer",
+      "name": "Lab Computer",
+      "platform": "Linux",
+      "status": "offline",
+      "detail": "Last reachable 18 minutes ago",
+      "checkedAt": "2026-01-15T11:42:00Z",
+      "issueTypes": ["availability"]
+    }
+  ],
+  "linuxUpdates": [
+    {
+      "hostId": "media-server",
+      "hostName": "Media Server",
+      "state": "updatesAvailable",
+      "packageManager": "apt",
+      "availableCount": 4,
+      "restartRequired": true,
+      "checkedAt": "2026-01-15T11:59:45Z"
+    }
+  ],
+  "incidents": [
+    {
+      "id": "sample-incident",
+      "hostId": "lab-computer",
+      "hostName": "Lab Computer",
+      "kind": "availability",
+      "severity": "warning",
+      "title": "Machine went offline",
+      "detail": "The observer could not establish a connection.",
+      "startedAt": "2026-01-15T11:42:00Z"
+    }
+  ],
+  "metrics": [
+    {
+      "hostId": "media-server",
+      "capturedAt": "2026-01-15T11:59:50Z",
+      "pingMs": 74,
+      "jitterMs": 7,
+      "packetLossPercent": 0,
+      "sshReadyMs": 540,
+      "fullProbeMs": 1120,
+      "health": 91
+    }
+  ]
+}

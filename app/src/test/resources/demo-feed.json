@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-01-15T12:00:00Z",
+  "observer": { "id": "primary-observer", "name": "Primary Observer", "appVersion": "1.0" },
+  "summary": {
+    "total": 3,
+    "online": 2,
+    "offline": 1,
+    "slowConnections": 1,
+    "accessIssues": 1,
+    "alerts": 1,
+    "updatesAvailable": 1,
+    "restartRequired": 1
+  },
+  "hosts": [
+    {
+      "id": "design-workstation",
+      "name": "Design Workstation",
+      "platform": "macOS",
+      "status": "online",
+      "checkedAt": "2026-01-15T11:59:55Z",
+      "health": 100,
+      "pingMs": 8,
+      "diskPercent": 44,
+      "memoryPercent": 61,
+      "loadAverage": 1.2,
+      "bootDescription": "Up for 4 days",
+      "codexMacAppVersion": "1.0",
+      "codexMacAppBuild": "100",
+      "services": [{ "name": "Web service", "state": "running" }]
+    },
+    {
+      "id": "media-server",
+      "name": "Media Server",
+      "platform": "Linux",
+      "status": "slow",
+      "issueTypes": ["slow", "access"],
+      "restartRequired": true,
+      "warnings": [{ "kind": "restart", "title": "Restart required", "detail": "A new kernel is ready." }]
+    },
+    {
+      "id": "lab-computer",
+      "name": "Lab Computer",
+      "platform": "Linux",
+      "status": "offline"
+    }
+  ],
+  "linuxUpdates": [
+    {
+      "hostId": "media-server",
+      "hostName": "Media Server",
+      "state": "updatesAvailable",
+      "availableCount": 4,
+      "restartRequired": true
+    }
+  ],
+  "incidents": [
+    {
+      "id": "sample-incident",
+      "hostId": "lab-computer",
+      "hostName": "Lab Computer",
+      "kind": "availability",
+      "title": "Machine went offline",
+      "startedAt": "2026-01-15T11:42:00Z"
+    }
+  ],
+  "metrics": [
+    { "hostId": "media-server", "capturedAt": "2026-01-15T11:59:50Z", "pingMs": 74 }
+  ]
+}

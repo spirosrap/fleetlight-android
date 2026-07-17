@@ -36,8 +36,8 @@ android {
         applicationId = "app.fleetlight.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -121,4 +121,13 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+}
+
+val releaseRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.endsWith("assembleRelease") || taskName.endsWith("bundleRelease")
+}
+if (releaseRequested && !hasReleaseSigning) {
+    throw GradleException(
+        "Release signing is required. Configure keystore.properties or the FLEETLIGHT_ANDROID_* environment variables.",
+    )
 }

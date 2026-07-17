@@ -79,6 +79,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.fleetlight.mobile.BuildConfig
 import app.fleetlight.mobile.data.EndpointPolicy
+import app.fleetlight.mobile.data.ControlAction
+import app.fleetlight.mobile.data.ControlCapability
+import app.fleetlight.mobile.data.ControlEndpointPolicy
+import app.fleetlight.mobile.data.ControlJob
+import app.fleetlight.mobile.data.ControlJobState
 import app.fleetlight.mobile.data.FeedObserver
 import app.fleetlight.mobile.data.FleetHost
 import app.fleetlight.mobile.data.FleetIncident
@@ -110,6 +115,14 @@ fun FleetlightApp(viewModel: FleetlightViewModel) {
         onSaveEndpoints = viewModel::saveEndpoints,
         onConfirmPendingEndpoints = viewModel::confirmPendingEndpoints,
         onDismissPendingEndpoints = viewModel::dismissPendingEndpoints,
+        onStagePairing = viewModel::stagePairing,
+        onConfirmPairing = viewModel::confirmPendingPairing,
+        onDismissPairing = viewModel::dismissPendingPairing,
+        onRevokeControl = viewModel::revokeControl,
+        onRequestUpdate = viewModel::requestUpdate,
+        onConfirmUpdate = viewModel::confirmPendingUpdate,
+        onDismissUpdate = viewModel::dismissPendingUpdate,
+        onDismissJob = viewModel::dismissFinishedJob,
     )
 }
 
@@ -121,6 +134,14 @@ fun FleetlightContent(
     onSaveEndpoints: (List<String>) -> Unit,
     onConfirmPendingEndpoints: () -> Unit,
     onDismissPendingEndpoints: () -> Unit,
+    onStagePairing: (String, String) -> Unit,
+    onConfirmPairing: () -> Unit,
+    onDismissPairing: () -> Unit,
+    onRevokeControl: () -> Unit,
+    onRequestUpdate: (ControlAction, List<String>) -> Unit,
+    onConfirmUpdate: () -> Unit,
+    onDismissUpdate: () -> Unit,
+    onDismissJob: () -> Unit,
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.FLEET) }
     var selectedHost by remember { mutableStateOf<FleetHost?>(null) }
@@ -178,9 +199,9 @@ fun FleetlightContent(
             state.banner?.let { ConnectionBanner(state.connection, it) }
             when (selectedTab) {
                 AppTab.FLEET -> FleetScreen(state.feed, onHostClick = { selectedHost = it })
-                AppTab.UPDATES -> UpdatesScreen(state.feed)
+                AppTab.UPDATES -> UpdatesScreen(state, onRequestUpdate, onDismissJob)
                 AppTab.EVENTS -> EventsScreen(state.feed)
-                AppTab.SETTINGS -> SettingsScreen(state, onSaveEndpoints)
+                AppTab.SETTINGS -> SettingsScreen(state, onSaveEndpoints, onStagePairing, onRevokeControl)
             }
         }
     }
@@ -202,6 +223,12 @@ fun FleetlightContent(
             onConfirm = onConfirmPendingEndpoints,
             onDismiss = onDismissPendingEndpoints,
         )
+    }
+    state.pendingPairing?.let { pairing ->
+        PairingConfirmationDialog(pairing.endpoint, onConfirmPairing, onDismissPairing)
+    }
+    state.pendingControlAction?.let { pending ->
+        UpdateConfirmationDialog(pending.action, pending.targetHostNames, onConfirmUpdate, onDismissUpdate)
     }
 }
 
@@ -227,6 +254,57 @@ private fun EndpointConfirmationDialog(
             }
         },
         confirmButton = { TextButton(onClick = onConfirm) { Text("Add & refresh") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun PairingConfirmationDialog(endpoint: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Pair update controls?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Fleetlight will exchange the one-time code with this observer:")
+                Text(endpoint, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                Text("The phone receives a scoped control token. SSH keys and administrator credentials remain on the observer Mac.")
+            }
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Pair securely") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun UpdateConfirmationDialog(
+    action: ControlAction,
+    hostNames: List<String>,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val warning = when (action) {
+        ControlAction.CODEX_CLI -> "Active Codex CLI sessions may be interrupted."
+        ControlAction.CODEX_MAC_APP -> "The Codex Mac app restarts automatically after updating."
+        ControlAction.LINUX_OS -> "Packages will update sequentially. Machines will not reboot automatically."
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Update ${action.title}?") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("${hostNames.size} machine${if (hostNames.size == 1) "" else "s"} will update sequentially:")
+                hostNames.forEach { Text("• $it", fontWeight = FontWeight.Medium) }
+                Text(warning, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(if (hostNames.size == 1) "Update ${hostNames.first()}" else "Update all ${hostNames.size}")
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
@@ -262,7 +340,7 @@ private fun FleetScreen(feed: MobileFeed?, onHostClick: (FleetHost) -> Unit) {
         EmptyState(
             icon = Icons.Outlined.Shield,
             title = "Ready for your fleet",
-            message = "Add one or more HTTPS mobile-feed endpoints in Settings. Fleetlight remains read-only on this phone.",
+            message = "Add one or more HTTPS mobile-feed endpoints in Settings. Pair a controller separately when you want to initiate updates.",
         )
         return
     }
@@ -448,31 +526,160 @@ private fun DetailRow(label: String, value: String) {
 }
 
 @Composable
-private fun UpdatesScreen(feed: MobileFeed?) {
+private fun UpdatesScreen(
+    state: FleetUiState,
+    onRequestUpdate: (ControlAction, List<String>) -> Unit,
+    onDismissJob: () -> Unit,
+) {
+    val feed = state.feed
     if (feed == null) {
-        EmptyState(Icons.Outlined.SystemUpdateAlt, "No update data", "Connect a feed to view read-only Linux update status.")
+        EmptyState(Icons.Outlined.SystemUpdateAlt, "No update data", "Connect a feed to view fleet update status.")
         return
     }
-    val updates = feed.linuxUpdates.sortedWith(
-        compareByDescending<LinuxUpdate> { it.restartRequired }
-            .thenByDescending { it.availableCount }
-            .thenBy { it.hostName.lowercase() },
-    )
+    val ready = state.connection == FeedConnection.LIVE &&
+        state.controlStatus?.commandAuthorityEnabled == true &&
+        state.controlStatus.jobJournalAvailable &&
+        state.controlStatus.busy.not() &&
+        state.activeJob?.state?.isTerminal != false
     LazyColumn(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        state.activeJob?.let { job ->
+            item { JobProgressCard(job, state.jobError, onDismissJob) }
+        }
+        if (state.activeJob == null && state.jobError != null) {
+            item { ControlMessageCard(state.jobError, error = true) }
+        }
+        if (state.controlStatus == null) {
+            item {
+                ControlMessageCard(
+                    if (state.controlChecking) "Checking paired update controller…" else "Pair an observer in Settings to initiate updates. Status remains available without pairing.",
+                )
+            }
+        } else if (!state.controlStatus.commandAuthorityEnabled) {
+            item { ControlMessageCard("Remote commands are disabled on the paired observer.") }
+        } else if (!state.controlStatus.jobJournalAvailable) {
+            item { ControlMessageCard("The paired controller cannot durably record jobs, so updates are disabled.", error = true) }
+        } else if (state.connection != FeedConnection.LIVE) {
+            item { ControlMessageCard("Updates are disabled until a live fleet snapshot is available.") }
+        }
+        ControlAction.entries.forEach { action ->
+            item {
+                UpdateActionSection(
+                    action = action,
+                    feed = feed,
+                    capabilities = state.controlStatus?.capabilities.orEmpty(),
+                    enabled = ready,
+                    onRequestUpdate = onRequestUpdate,
+                )
+            }
+        }
         item {
             SectionHeading(
-                title = "Linux updates",
-                subtitle = "Read-only status from ${feed.observer.name}",
+                title = "Linux package status",
+                subtitle = "Latest snapshot from ${feed.observer.name}",
             )
         }
+        val updates = feed.linuxUpdates.sortedWith(compareByDescending<LinuxUpdate> { it.availableCount }.thenBy { it.hostName.lowercase() })
         if (updates.isEmpty()) {
             item { InlineEmpty("No Linux machines in this feed") }
         } else {
             items(updates, key = LinuxUpdate::hostId) { update -> UpdateCard(update) }
         }
+    }
+}
+
+@Composable
+private fun UpdateActionSection(
+    action: ControlAction,
+    feed: MobileFeed,
+    capabilities: List<ControlCapability>,
+    enabled: Boolean,
+    onRequestUpdate: (ControlAction, List<String>) -> Unit,
+) {
+    val supported = capabilities.filter { action in it.actions }
+    val available = supported.filter { it.updateAvailable(action) }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(action.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(
+                        when {
+                            capabilities.isEmpty() -> "Pair to load eligible machines"
+                            available.isEmpty() -> "No update available"
+                            else -> "${available.size} update${if (available.size == 1) "" else "s"} available"
+                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                FilledTonalButton(
+                    onClick = { onRequestUpdate(action, available.map { it.hostId }) },
+                    enabled = enabled && available.isNotEmpty(),
+                ) {
+                    Text("Update all")
+                }
+            }
+            supported.forEach { capability ->
+                val current = feed.currentVersion(capability.hostId, action)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(capability.hostName, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            listOfNotNull(current, capability.state.takeIf(String::isNotBlank)).joinToString(" · ").ifBlank { "Status unavailable" },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    FilledTonalButton(
+                        onClick = { onRequestUpdate(action, listOf(capability.hostId)) },
+                        enabled = enabled && capability.updateAvailable(action),
+                    ) {
+                        Text(if (capability.updateAvailable(action)) "Update" else "Current")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun JobProgressCard(job: ControlJob, error: String?, onDismiss: () -> Unit) {
+    val terminal = job.state.isTerminal
+    val tone = when (job.state) {
+        ControlJobState.FAILED, ControlJobState.PARTIAL -> MaterialTheme.colorScheme.errorContainer
+        ControlJobState.SUCCEEDED -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.primaryContainer
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = tone)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!terminal) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("${job.action.title} · ${job.state.name.lowercase().replaceFirstChar(Char::uppercase)}", fontWeight = FontWeight.Bold)
+                    Text("${job.completedCount} of ${job.total} machines complete", style = MaterialTheme.typography.bodySmall)
+                }
+                if (terminal) TextButton(onClick = onDismiss) { Text("Done") }
+            }
+            job.targets.forEach { target ->
+                Text(
+                    "${target.hostName}: ${target.phase ?: target.state.name.lowercase()}${target.message?.let { " · $it" }.orEmpty()}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        }
+    }
+}
+
+@Composable
+private fun ControlMessageCard(text: String, error: Boolean = false) {
+    Card(colors = CardDefaults.cardColors(containerColor = if (error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer)) {
+        Text(text, modifier = Modifier.fillMaxWidth().padding(16.dp), style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -558,9 +765,18 @@ private fun EventCard(event: FleetIncident) {
 }
 
 @Composable
-private fun SettingsScreen(state: FleetUiState, onSaveEndpoints: (List<String>) -> Unit) {
+private fun SettingsScreen(
+    state: FleetUiState,
+    onSaveEndpoints: (List<String>) -> Unit,
+    onStagePairing: (String, String) -> Unit,
+    onForgetControl: () -> Unit,
+) {
     var drafts by rememberSaveable(state.endpoints) { mutableStateOf(state.endpoints.ifEmpty { listOf("") }) }
     var validation by rememberSaveable { mutableStateOf<String?>(null) }
+    var pairingEndpoint by rememberSaveable(state.controlEndpoint, state.activeEndpoint) {
+        mutableStateOf(state.controlEndpoint ?: state.activeEndpoint ?: state.endpoints.firstOrNull().orEmpty())
+    }
+    var pairingCode by rememberSaveable { mutableStateOf("") }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -610,6 +826,54 @@ private fun SettingsScreen(state: FleetUiState, onSaveEndpoints: (List<String>) 
         }
 
         HorizontalDivider()
+        SectionHeading("Update controller", "The paired Mac runs allowlisted fleet jobs; credentials never leave it")
+        if (state.controlEndpoint != null) {
+            SettingsInfoCard(
+                icon = Icons.Outlined.Shield,
+                title = state.controlStatus?.controllerName ?: "Paired controller",
+                text = listOfNotNull(
+                    ControlEndpointPolicy.authorityForFeed(state.controlEndpoint),
+                    if (state.controlStatus?.commandAuthorityEnabled == true && state.controlStatus.jobJournalAvailable) "Commands ready" else "Commands unavailable",
+                ).joinToString(" · "),
+            )
+            OutlinedButton(onClick = onForgetControl, enabled = state.activeJob?.state?.isTerminal != false) {
+                Text("Forget controller on this phone")
+            }
+            Text(
+                "To invalidate the controller token everywhere, revoke this Android device from Fleetlight on the Mac.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            OutlinedTextField(
+                value = pairingEndpoint,
+                onValueChange = { pairingEndpoint = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Observer feed endpoint") },
+                singleLine = true,
+                isError = pairingEndpoint.isNotBlank() && EndpointPolicy.normalize(pairingEndpoint) == null,
+            )
+            OutlinedTextField(
+                value = pairingCode,
+                onValueChange = { pairingCode = it.filter(Char::isDigit).take(8) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("8-digit pairing code") },
+                singleLine = true,
+            )
+            FilledTonalButton(
+                onClick = { onStagePairing(pairingEndpoint, pairingCode) },
+                enabled = !state.pairing && EndpointPolicy.normalize(pairingEndpoint) != null && pairingCode.length == 8,
+            ) {
+                if (state.pairing) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(if (state.pairing) "Pairing…" else "Pair update controls")
+            }
+        }
+        state.controlError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+
+        HorizontalDivider()
         SettingsInfoCard(
             icon = Icons.Outlined.Computer,
             title = "Versions",
@@ -617,8 +881,8 @@ private fun SettingsScreen(state: FleetUiState, onSaveEndpoints: (List<String>) 
         )
         SettingsInfoCard(
             icon = Icons.Outlined.Shield,
-            title = "Read-only by design",
-            text = "This app receives display-only snapshots. It contains no SSH keys, sudo credentials, update buttons, or restart controls.",
+            title = "Scoped control by design",
+            text = "Fleet status stays read-only until you explicitly pair. Update requests contain only an allowlisted action and machine IDs; SSH and sudo credentials remain on the controller Mac.",
         )
         SettingsInfoCard(
             icon = Icons.Outlined.Storage,
@@ -711,7 +975,7 @@ private fun hostPriority(host: FleetHost): Int = when (host.state) {
 }
 
 private fun observerSubtitle(state: FleetUiState): String {
-    val observer = state.feed?.observer?.name ?: "Read-only fleet companion"
+    val observer = state.feed?.observer?.name ?: "Secure fleet companion"
     val sourceVersion = state.feed?.observer?.appVersion?.let { "Observer $it" }
     val connection = when (state.connection) {
         FeedConnection.LIVE -> "Live"
@@ -743,6 +1007,20 @@ private fun formatDecimal(value: Double): String = if (value == value.roundToInt
     "%.1f".format(value)
 }
 
+private fun ControlCapability.updateAvailable(action: ControlAction): Boolean = when (action) {
+    ControlAction.CODEX_CLI -> codexCliUpdateAvailable
+    ControlAction.CODEX_MAC_APP -> codexMacAppUpdateAvailable
+    ControlAction.LINUX_OS -> linuxUpdateAvailable
+}
+
+private fun MobileFeed.currentVersion(hostId: String, action: ControlAction): String? = when (action) {
+    ControlAction.CODEX_CLI -> hosts.firstOrNull { it.id == hostId }?.codexCliVersion?.let { "Current $it" }
+    ControlAction.CODEX_MAC_APP -> hosts.firstOrNull { it.id == hostId }?.codexMacAppVersion?.let { "Current $it" }
+    ControlAction.LINUX_OS -> linuxUpdates.firstOrNull { it.hostId == hostId }?.let {
+        if (it.availableCount > 0) "${it.availableCount} packages" else "Current"
+    }
+}
+
 @Preview(showBackground = true, widthDp = 412, heightDp = 860)
 @Composable
 private fun FleetPreview() {
@@ -753,6 +1031,14 @@ private fun FleetPreview() {
             onSaveEndpoints = {},
             onConfirmPendingEndpoints = {},
             onDismissPendingEndpoints = {},
+            onStagePairing = { _, _ -> },
+            onConfirmPairing = {},
+            onDismissPairing = {},
+            onRevokeControl = {},
+            onRequestUpdate = { _, _ -> },
+            onConfirmUpdate = {},
+            onDismissUpdate = {},
+            onDismissJob = {},
         )
     }
 }

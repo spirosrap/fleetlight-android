@@ -1,0 +1,141 @@
+package app.fleetlight.mobile.data
+
+import java.time.Instant
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+
+class ControlProtocolException(message: String) : Exception(message)
+class ControlHttpException(val status: Int, message: String) : Exception(message)
+
+class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) {
+    fun pair(raw: String): ControlPairResult {
+        val root = objectRoot(raw)
+        val token = root.text("token")
+            ?: throw ControlProtocolException("Pairing response did not include a control token")
+        if (token.length > MAX_TOKEN_LENGTH) throw ControlProtocolException("Pairing token was invalid")
+        val controllerId = root.text("controllerId")
+            ?: throw ControlProtocolException("Pairing response did not identify the controller")
+        return ControlPairResult(token = token, observerId = controllerId)
+    }
+
+    fun status(raw: String): ControlStatus {
+        val root = objectRoot(raw)
+        val controllerId = root.text("controllerId")
+            ?: throw ControlProtocolException("Control status did not identify the controller")
+        val authorityEnabled = root.boolean("commandAuthorityEnabled") ?: false
+        val capabilities = root.arrayValue("capabilities").mapNotNull { element ->
+            val value = element as? JsonObject ?: return@mapNotNull null
+            val hostId = value.text("hostId") ?: return@mapNotNull null
+            val actions = value.arrayValue("actions").mapNotNull { action ->
+                ControlAction.fromWire((action as? JsonPrimitive)?.contentOrNull)
+            }.toSet()
+            ControlCapability(
+                hostId = hostId,
+                hostName = value.text("hostName") ?: hostId,
+                state = value.text("state") ?: "unknown",
+                actions = actions,
+                codexCliUpdateAvailable = value.boolean("codexCliUpdateAvailable") ?: false,
+                codexMacAppUpdateAvailable = value.boolean("codexMacAppUpdateAvailable") ?: false,
+                linuxUpdateAvailable = value.boolean("linuxUpdateAvailable") ?: false,
+            )
+        }
+        if (authorityEnabled && capabilities.isEmpty()) {
+            throw ControlProtocolException("Control status did not include capabilities")
+        }
+        val recentJobs = root.arrayValue("recentJobs").mapNotNull { element ->
+            val value = element as? JsonObject ?: return@mapNotNull null
+            val action = ControlAction.fromWire(value.text("action")) ?: return@mapNotNull null
+            runCatching { job(value.toString(), action) }.getOrNull()
+        }
+        return ControlStatus(
+            observerId = controllerId,
+            controllerName = root.text("controllerName"),
+            commandAuthorityEnabled = authorityEnabled,
+            jobJournalAvailable = root.boolean("jobJournalAvailable") ?: false,
+            actions = capabilities.flatMap { it.actions }.toSet(),
+            capabilities = capabilities,
+            busy = root.boolean("busy") ?: false,
+            activeJobId = root.text("activeJobId"),
+            recentJobs = recentJobs,
+        )
+    }
+
+    fun job(raw: String, fallbackAction: ControlAction): ControlJob {
+        val envelope = objectRoot(raw)
+        val root = envelope.objectValue("job") ?: envelope
+        val id = root.text("id", "jobId")
+            ?: throw ControlProtocolException("Job response did not include an id")
+        val action = ControlAction.fromWire(root.text("action")) ?: fallbackAction
+        val progress = root.arrayValue("progress").mapNotNull { element ->
+            val value = element as? JsonObject ?: return@mapNotNull null
+            val hostId = value.text("hostId") ?: return@mapNotNull null
+            val phase = value.text("phase")
+            ControlJobTarget(
+                hostId = hostId,
+                state = ControlTargetState.fromWire(phase),
+                phase = phase,
+                message = value.text("detail")?.take(MAX_MESSAGE_LENGTH),
+            )
+        }
+        val targetIds = root.stringArray("targetHostIds")
+        return ControlJob(
+            id = id,
+            requestId = root.text("requestId"),
+            action = action,
+            state = ControlJobState.fromWire(root.text("state")),
+            targetHostIds = targetIds,
+            targets = progress,
+            completed = root.integer("completed") ?: 0,
+            total = root.integer("total") ?: targetIds.size,
+            message = root.text("message")?.take(MAX_MESSAGE_LENGTH),
+            createdAt = root.instant("createdAt"),
+            updatedAt = root.instant("finishedAt", "startedAt"),
+        )
+    }
+
+    fun errorMessage(raw: String): String? = runCatching {
+        val root = objectRoot(raw)
+        (root.objectValue("error") ?: root).text("message", "detail")?.take(MAX_MESSAGE_LENGTH)
+    }.getOrNull()
+
+    private fun objectRoot(raw: String): JsonObject = try {
+        json.parseToJsonElement(raw).jsonObject
+    } catch (_: Exception) {
+        throw ControlProtocolException("Control response was not valid JSON")
+    }
+
+    private companion object {
+        const val MAX_MESSAGE_LENGTH = 400
+        const val MAX_TOKEN_LENGTH = 4096
+    }
+}
+
+private fun JsonObject.text(vararg keys: String): String? = keys.firstNotNullOfOrNull { key ->
+    (this[key] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)
+}
+
+private fun JsonObject.objectValue(key: String): JsonObject? = this[key] as? JsonObject
+
+private fun JsonObject.arrayValue(vararg keys: String): JsonArray =
+    keys.firstNotNullOfOrNull { this[it] as? JsonArray } ?: JsonArray(emptyList())
+
+private fun JsonObject.boolean(vararg keys: String): Boolean? = keys.firstNotNullOfOrNull { key ->
+    (this[key] as? JsonPrimitive)?.booleanOrNull
+}
+
+private fun JsonObject.integer(vararg keys: String): Int? = keys.firstNotNullOfOrNull { key ->
+    (this[key] as? JsonPrimitive)?.intOrNull
+}
+
+private fun JsonObject.stringArray(vararg keys: String): List<String> =
+    arrayValue(*keys).mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty) }
+
+private fun JsonObject.instant(vararg keys: String): Instant? = text(*keys)?.let { raw ->
+    runCatching { Instant.parse(raw) }.getOrNull()
+}

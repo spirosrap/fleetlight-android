@@ -56,6 +56,45 @@ class ControlRepository(
         return status
     }
 
+    suspend fun createCheck(
+        endpoint: String,
+        requestId: String = UUID.randomUUID().toString(),
+    ): ControlCheck {
+        require(requestId.canonicalUuidOrNull() != null) { "requestId must be a UUID" }
+        val session = session(endpoint)
+        val url = requireNotNull(ControlEndpointPolicy.route(endpoint, "checks"))
+        val body = buildJsonObject { put("requestId", requestId) }.toString()
+        val check = parser.check(
+            transport.request(
+                ControlHttpRequest(
+                    method = "POST",
+                    url = url,
+                    token = session.token,
+                    body = body,
+                    idempotencyKey = requestId,
+                ),
+            ),
+        )
+        validateCheck(check, expectedRequestId = requestId)
+        return check
+    }
+
+    suspend fun check(
+        endpoint: String,
+        checkId: String,
+        expectedRequestId: String,
+    ): ControlCheck {
+        require(checkId.canonicalUuidOrNull() != null) { "Invalid update check id" }
+        require(expectedRequestId.canonicalUuidOrNull() != null) { "Invalid request id" }
+        val session = session(endpoint)
+        val url = requireNotNull(ControlEndpointPolicy.route(endpoint, "checks/$checkId"))
+        val check = parser.check(
+            transport.request(ControlHttpRequest("GET", url, token = session.token)),
+        )
+        validateCheck(check, expectedId = checkId, expectedRequestId = expectedRequestId)
+        return check
+    }
+
     suspend fun createJob(
         endpoint: String,
         action: ControlAction,
@@ -154,6 +193,23 @@ class ControlRepository(
     private fun validateTargetCount(job: ControlJob) {
         if (job.action.requiresExactlyOneTarget && job.targetHostIds.size != 1) {
             throw ControlProtocolException("Controller returned an invalid multi-machine restart")
+        }
+    }
+
+    private fun validateCheck(
+        check: ControlCheck,
+        expectedId: String? = null,
+        expectedRequestId: String,
+    ) {
+        val actualId = check.id.canonicalUuidOrNull()
+        val actualRequestId = check.requestId.canonicalUuidOrNull()
+        val expectedIdValue = expectedId?.canonicalUuidOrNull()
+        val expectedRequestIdValue = expectedRequestId.canonicalUuidOrNull()
+        if (actualId == null || actualRequestId == null || expectedRequestIdValue == null ||
+            (expectedId != null && actualId != expectedIdValue) ||
+            actualRequestId != expectedRequestIdValue
+        ) {
+            throw ControlProtocolException("Controller returned a mismatched update check")
         }
     }
 

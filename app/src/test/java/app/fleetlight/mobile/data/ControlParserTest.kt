@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
 
 class ControlParserTest {
     private val parser = ControlParser()
@@ -121,5 +122,59 @@ class ControlParserTest {
         )
 
         assertEquals("Studio Linux", status.recentJobs.single().targets.single().hostName)
+    }
+
+    @Test
+    fun parsesOptionalLiveCheckMetadataWithoutBreakingLegacyStatus() {
+        val status = parser.status(
+            """{
+              "controllerId":"controller-a","commandAuthorityEnabled":true,
+              "checkingUpdates":true,"activeCheckId":"check-a",
+              "latestCodexCliVersion":"0.144.5","codexCliCheckedAt":"2026-07-17T10:00:00Z",
+              "codexCliCheckFailed":false,
+              "latestCodexMacAppVersion":"26.715.21425","latestCodexMacAppBuild":"5488",
+              "codexMacAppCheckedAt":"2026-07-17T10:01:00Z","codexMacAppCheckFailed":true,
+              "capabilities":[{
+                "hostId":"host-a","actions":["linux-os"],
+                "linuxCheckedAt":"2026-07-17T10:02:00Z"
+              }]
+            }""",
+        )
+
+        assertTrue(status.checkingUpdates)
+        assertEquals("check-a", status.activeCheckId)
+        assertEquals("0.144.5", status.latestCodexCliVersion)
+        assertEquals(Instant.parse("2026-07-17T10:00:00Z"), status.codexCliCheckedAt)
+        assertEquals("26.715.21425", status.latestCodexMacAppVersion)
+        assertEquals("5488", status.latestCodexMacAppBuild)
+        assertTrue(status.codexMacAppCheckFailed)
+        assertEquals(Instant.parse("2026-07-17T10:02:00Z"), status.capabilities.single().linuxCheckedAt)
+
+        val legacy = parser.status(
+            """{"controllerId":"controller-a","commandAuthorityEnabled":true,"capabilities":[{"hostId":"host-a","actions":[]}]}""",
+        )
+        assertFalse(legacy.checkingUpdates)
+        assertEquals(null, legacy.latestCodexCliVersion)
+        assertEquals(null, legacy.capabilities.single().linuxCheckedAt)
+    }
+
+    @Test
+    fun parsesCheckEnvelopeAndRejectsMalformedTerminalData() {
+        val check = parser.check(
+            """{"check":{"id":"check-a","requestId":"00000000-0000-0000-0000-000000000001","state":"partial","phase":"linux","detail":"One host offline","startedAt":"2026-07-17T10:00:00Z","finishedAt":"2026-07-17T10:01:00Z"}}""",
+        )
+        assertEquals(ControlCheckState.PARTIAL, check.state)
+        assertEquals("linux", check.phase)
+        assertTrue(check.state.isTerminal)
+
+        assertThrows(ControlProtocolException::class.java) {
+            parser.check("""{"id":"check-a","requestId":"00000000-0000-0000-0000-000000000001","state":"mystery","phase":"complete","detail":"Done"}""")
+        }
+        assertThrows(ControlProtocolException::class.java) {
+            parser.check("""{"id":"check-a","requestId":"00000000-0000-0000-0000-000000000001","state":"succeeded","phase":"complete","detail":"Done","finishedAt":"not-a-time"}""")
+        }
+        assertThrows(ControlProtocolException::class.java) {
+            parser.check("""{"id":"check-a","requestId":"00000000-0000-0000-0000-000000000001","state":"running","phase":"linux"}""")
+        }
     }
 }

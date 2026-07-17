@@ -8,12 +8,18 @@ import androidx.lifecycle.viewModelScope
 import app.fleetlight.mobile.data.AndroidControlCredentialStore
 import app.fleetlight.mobile.data.ControlAction
 import app.fleetlight.mobile.data.ControlAuthorityStore
+import app.fleetlight.mobile.data.ControlCheck
+import app.fleetlight.mobile.data.ControlCheckOrchestrator
+import app.fleetlight.mobile.data.ControlCheckState
+import app.fleetlight.mobile.data.ControlCheckStore
 import app.fleetlight.mobile.data.ControlEndpointPolicy
 import app.fleetlight.mobile.data.ControlHttpException
 import app.fleetlight.mobile.data.ControlJob
 import app.fleetlight.mobile.data.ControlJobStore
+import app.fleetlight.mobile.data.ControlProtocolException
 import app.fleetlight.mobile.data.ControlRepository
 import app.fleetlight.mobile.data.ControlStatus
+import app.fleetlight.mobile.data.ControllerFeedLoader
 import app.fleetlight.mobile.data.DeviceIdentityStore
 import app.fleetlight.mobile.data.EndpointPolicy
 import app.fleetlight.mobile.data.EndpointStore
@@ -29,11 +35,13 @@ import app.fleetlight.mobile.data.MobileFeed
 import app.fleetlight.mobile.data.PendingControlAction
 import app.fleetlight.mobile.data.PendingPairing
 import app.fleetlight.mobile.data.StoredControlJob
+import app.fleetlight.mobile.data.StoredControlCheck
 import java.time.Duration
 import java.time.Instant
 import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +54,7 @@ enum class FeedConnection { EMPTY, LIVE, CACHED, ERROR }
 
 data class FleetUiState(
     val feed: MobileFeed? = null,
+    val controllerFeed: MobileFeed? = null,
     val endpoints: List<String> = emptyList(),
     val connection: FeedConnection = FeedConnection.EMPTY,
     val refreshing: Boolean = false,
@@ -62,6 +71,10 @@ data class FleetUiState(
     val pairing: Boolean = false,
     val activeJob: ControlJob? = null,
     val jobError: String? = null,
+    val activeCheck: ControlCheck? = null,
+    val updateCheckSubmitting: Boolean = false,
+    val updateCheckError: String? = null,
+    val checkSyncPending: Boolean = false,
 )
 
 class FleetlightViewModel(
@@ -71,6 +84,12 @@ class FleetlightViewModel(
         source = HttpsFeedSource(),
         cache = FileFeedCache(application),
     ),
+    private val controllerFeedLoader: ControllerFeedLoader = ControllerFeedLoader(
+        FeedRepository(
+            source = HttpsFeedSource(),
+            cache = FileFeedCache(application, "controller-feed-cache"),
+        ),
+    ),
     private val controlRepository: ControlRepository = ControlRepository(
         transport = HttpsControlSource(),
         credentials = AndroidControlCredentialStore(application),
@@ -78,17 +97,26 @@ class FleetlightViewModel(
     private val deviceIdentity: DeviceIdentityStore = DeviceIdentityStore(application),
     private val controlAuthorityStore: ControlAuthorityStore = ControlAuthorityStore(application),
     private val jobStore: ControlJobStore = ControlJobStore(application),
+    private val checkStore: ControlCheckStore = ControlCheckStore(application),
+    private val checkOrchestrator: ControlCheckOrchestrator = ControlCheckOrchestrator(controlRepository),
     private val now: () -> Instant = Instant::now,
 ) : AndroidViewModel(application) {
+    private val restoredCheck = checkStore.read()
     private val mutableState = MutableStateFlow(
-        FleetUiState(endpoints = endpointStore.endpoints(), controlEndpoint = controlAuthorityStore.read()),
+        FleetUiState(
+            endpoints = endpointStore.endpoints(),
+            controlEndpoint = controlAuthorityStore.read(),
+            checkSyncPending = restoredCheck != null,
+        ),
     )
     val state: StateFlow<FleetUiState> = mutableState.asStateFlow()
     private val refreshMutex = Mutex()
+    private val controllerFeedMutex = Mutex()
     private var endpointObservation: AutoCloseable? = null
     private var autoRefreshJob: Job? = null
-    private var controlCheckJob: Job? = null
+    private var controlStatusJob: Job? = null
     private var jobPollingJob: Job? = null
+    private var updateCheckJob: Job? = null
 
     init {
         endpointObservation = endpointStore.observe { endpoints ->
@@ -99,6 +127,7 @@ class FleetlightViewModel(
             refresh()
         }
         jobStore.read()?.let(::resumeStoredJob)
+        restoredCheck?.let(::resumeStoredCheck)
         autoRefreshJob = viewModelScope.launch {
             while (true) {
                 delay(AUTO_REFRESH_MILLIS)
@@ -109,6 +138,49 @@ class FleetlightViewModel(
 
     fun refreshNow() {
         viewModelScope.launch { refresh() }
+    }
+
+    fun checkForUpdates() {
+        checkStore.read()?.let { stored ->
+            resumeStoredCheck(stored)
+            return
+        }
+        val current = mutableState.value
+        val endpoint = current.controlEndpoint
+        val status = current.controlStatus
+        if (current.connection != FeedConnection.LIVE || endpoint == null || status == null ||
+            !status.commandAuthorityEnabled
+        ) {
+            mutableState.value = current.copy(updateCheckError = "Pair a live controller before checking for updates")
+            return
+        }
+        if (status.checkingUpdates || current.updateCheckSubmitting ||
+            current.activeCheck?.state?.isTerminal == false
+        ) {
+            mutableState.value = current.copy(updateCheckError = "An update check is already running")
+            return
+        }
+        if (status.busy || current.activeJob?.state?.isTerminal == false) {
+            mutableState.value = current.copy(updateCheckError = "Wait for the current fleet operation to finish")
+            return
+        }
+        val controlBase = ControlEndpointPolicy.baseForFeed(endpoint)
+        if (controlBase == null) {
+            mutableState.value = current.copy(updateCheckError = "The paired controller address is invalid")
+            return
+        }
+        val stored = StoredControlCheck(
+            endpoint = endpoint,
+            controlBase = controlBase,
+            checkId = null,
+            requestId = UUID.randomUUID().toString(),
+        )
+        if (!checkStore.write(stored)) {
+            mutableState.value = current.copy(updateCheckError = "The check was not started because its recovery record could not be saved")
+            return
+        }
+        mutableState.value = mutableState.value.copy(checkSyncPending = true)
+        runStoredCheck(stored)
     }
 
     fun saveEndpoints(values: List<String>) {
@@ -136,6 +208,10 @@ class FleetlightViewModel(
     }
 
     fun stagePairing(endpoint: String, code: String) {
+        if (pairingBlockedByControlWork(mutableState.value, jobStore.read() != null, checkStore.read() != null)) {
+            mutableState.value = mutableState.value.copy(controlError = PAIRING_WAIT_MESSAGE)
+            return
+        }
         val normalizedEndpoint = EndpointPolicy.normalize(endpoint)
         val normalizedCode = ControlEndpointPolicy.validPairingCode(code)
         if (normalizedEndpoint == null || normalizedCode == null) {
@@ -149,24 +225,37 @@ class FleetlightViewModel(
     }
 
     fun confirmPendingPairing() {
+        if (mutableState.value.pairing) return
         val pending = mutableState.value.pendingPairing ?: return
+        if (pairingBlockedByControlWork(mutableState.value, jobStore.read() != null, checkStore.read() != null)) {
+            mutableState.value = mutableState.value.copy(
+                pendingPairing = null,
+                pairing = false,
+                controlError = PAIRING_WAIT_MESSAGE,
+            )
+            return
+        }
         mutableState.value = mutableState.value.copy(pairing = true, controlError = null)
         viewModelScope.launch {
             runCatching {
                 controlRepository.pair(pending.endpoint, pending.code, deviceIdentity.id, deviceIdentity.name)
             }.onSuccess { status ->
+                val controllerChanged = mutableState.value.controlEndpoint != pending.endpoint
+                controlStatusJob?.cancel()
                 controlAuthorityStore.write(pending.endpoint)
                 mutableState.value = mutableState.value.copy(
                     pairing = false,
                     pendingPairing = null,
                     controlStatus = status,
                     controlEndpoint = pending.endpoint,
+                    controllerFeed = if (controllerChanged) null else mutableState.value.controllerFeed,
                     controlError = when {
                         !status.commandAuthorityEnabled -> "Remote commands are disabled on this observer"
                         !status.jobJournalAvailable -> "The controller job journal is unavailable; updates are disabled"
                         else -> null
                     },
                 )
+                viewModelScope.launch { refreshControllerFeedBestEffort(pending.endpoint) }
             }.onFailure { error ->
                 mutableState.value = mutableState.value.copy(
                     pairing = false,
@@ -187,13 +276,20 @@ class FleetlightViewModel(
         controlRepository.revoke(endpoint)
         controlAuthorityStore.clear()
         jobPollingJob?.cancel()
+        updateCheckJob?.cancel()
         jobStore.clear()
+        checkStore.clear()
         mutableState.value = mutableState.value.copy(
             controlStatus = null,
             controlEndpoint = null,
+            controllerFeed = null,
             controlError = null,
             activeJob = null,
             jobError = null,
+            activeCheck = null,
+            updateCheckSubmitting = false,
+            updateCheckError = null,
+            checkSyncPending = false,
         )
     }
 
@@ -206,6 +302,12 @@ class FleetlightViewModel(
         }
         if (status.busy || current.activeJob?.state?.isTerminal == false || jobStore.read() != null) {
             mutableState.value = current.copy(controlError = "Another fleet operation is already active")
+            return
+        }
+        if (status.checkingUpdates || current.updateCheckSubmitting || current.checkSyncPending ||
+            current.activeCheck?.state?.isTerminal == false
+        ) {
+            mutableState.value = current.copy(controlError = "Wait for the live update check to finish")
             return
         }
         val requested = hostIds.distinct()
@@ -407,52 +509,184 @@ class FleetlightViewModel(
         submitOrRecover(stored)
     }
 
+    private fun resumeStoredCheck(stored: StoredControlCheck) {
+        runStoredCheck(stored)
+    }
+
+    private fun runStoredCheck(stored: StoredControlCheck) {
+        updateCheckJob?.cancel()
+        updateCheckJob = viewModelScope.launch {
+            if (ControlEndpointPolicy.baseForFeed(stored.endpoint) != stored.controlBase ||
+                mutableState.value.controlEndpoint != stored.endpoint ||
+                !controlRepository.isPaired(stored.endpoint)
+            ) {
+                checkStore.clear()
+                mutableState.value = mutableState.value.copy(
+                    updateCheckSubmitting = false,
+                    checkSyncPending = false,
+                    updateCheckError = "Saved update check no longer matches the paired controller",
+                )
+                return@launch
+            }
+            mutableState.value = mutableState.value.copy(
+                updateCheckSubmitting = stored.checkId == null,
+                updateCheckError = null,
+                checkSyncPending = true,
+                activeCheck = if (stored.checkId == null) null else mutableState.value.activeCheck,
+            )
+            var persistenceWarning: String? = null
+            val result = runCatching {
+                checkOrchestrator.execute(
+                    stored = stored,
+                    onAccepted = { check ->
+                        val bound = stored.copy(checkId = check.id)
+                        if (!checkStore.write(bound)) {
+                            persistenceWarning = "The check started, but recovery progress could not be saved"
+                        }
+                    },
+                    onProgress = { check ->
+                        mutableState.value = mutableState.value.copy(
+                            activeCheck = check,
+                            updateCheckSubmitting = false,
+                            updateCheckError = persistenceWarning,
+                        )
+                    },
+                    refreshFeed = { refreshControllerFeedStrict(stored.endpoint) },
+                    refreshStatus = { fetchAndApplyControlStatus(stored.endpoint) },
+                )
+            }
+            val completed = result.getOrNull()
+            if (completed != null) {
+                checkStore.clear()
+                val terminalMessage = when (completed.state) {
+                    ControlCheckState.SUCCEEDED -> persistenceWarning
+                    ControlCheckState.PARTIAL -> completed.detail ?: "Some update sources could not be checked"
+                    ControlCheckState.FAILED -> completed.detail ?: "The update check failed"
+                    ControlCheckState.CANCELLED -> completed.detail ?: "The update check was cancelled"
+                    else -> persistenceWarning
+                }
+                mutableState.value = mutableState.value.copy(
+                    activeCheck = completed,
+                    updateCheckSubmitting = false,
+                    updateCheckError = terminalMessage,
+                    checkSyncPending = false,
+                )
+            } else {
+                val error = requireNotNull(result.exceptionOrNull())
+                if (error is CancellationException) throw error
+                if (shouldClearStoredCheckAfterFailure(mutableState.value.activeCheck, error)) {
+                    checkStore.clear()
+                }
+                val recoveryPending = checkStore.read() != null
+                mutableState.value = mutableState.value.copy(
+                    activeCheck = mutableState.value.activeCheck?.takeIf { it.state.isTerminal },
+                    updateCheckSubmitting = false,
+                    updateCheckError = safeMessage(error, "Update check progress is unavailable"),
+                    checkSyncPending = recoveryPending,
+                )
+            }
+        }
+    }
+
     private fun checkControl(endpoint: String) {
-        controlCheckJob?.cancel()
+        controlStatusJob?.cancel()
         if (!controlRepository.isPaired(endpoint)) {
             mutableState.value = mutableState.value.copy(
                 controlStatus = null,
+                controllerFeed = null,
                 controlChecking = false,
                 controlError = "Pair this controller again",
             )
             return
         }
-        controlCheckJob = viewModelScope.launch {
-            mutableState.value = mutableState.value.copy(controlChecking = true)
-            runCatching { controlRepository.status(endpoint) }
-                .onSuccess { status ->
+        controlStatusJob = viewModelScope.launch {
+            loadControlStatus(endpoint, markChecking = true)
+        }
+    }
+
+    private suspend fun loadControlStatus(endpoint: String, markChecking: Boolean) {
+        if (markChecking) mutableState.value = mutableState.value.copy(controlChecking = true)
+        try {
+            fetchAndApplyControlStatus(endpoint)
+            refreshControllerFeedBestEffort(endpoint)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            val normalized = EndpointPolicy.normalize(endpoint)
+            if (mutableState.value.controlEndpoint == normalized) {
+                mutableState.value = mutableState.value.copy(
+                    controlStatus = null,
+                    controlChecking = false,
+                    controlError = safeMessage(error, "Controller unavailable"),
+                )
+            }
+        }
+    }
+
+    private suspend fun fetchAndApplyControlStatus(endpoint: String): ControlStatus {
+        val normalized = EndpointPolicy.normalize(endpoint)
+            ?: throw ControlProtocolException("Paired controller endpoint is invalid")
+        if (!matchesPairedController(normalized, mutableState.value.controlEndpoint)) {
+            throw ControlProtocolException("Paired controller changed before status could be refreshed")
+        }
+        val status = controlRepository.status(normalized)
+        if (!matchesPairedController(normalized, mutableState.value.controlEndpoint)) {
+            throw ControlProtocolException("Paired controller changed while status was refreshing")
+        }
+        mutableState.value = mutableState.value.copy(
+            controlStatus = status,
+            controlChecking = false,
+            controlError = when {
+                !status.commandAuthorityEnabled -> "Remote commands are disabled on this observer"
+                !status.jobJournalAvailable -> "The controller job journal is unavailable; updates are disabled"
+                else -> null
+            },
+        )
+        if (mutableState.value.activeJob == null) {
+            status.recentJobs.firstOrNull { it.id == status.activeJobId }?.let { job ->
+                val requestId = job.requestId ?: return@let
+                val targets = job.targetHostIds
+                if (targets.isEmpty()) return@let
+                val storedJob = StoredControlJob(
+                    endpoint,
+                    requireNotNull(ControlEndpointPolicy.baseForFeed(endpoint)),
+                    job.id,
+                    requestId,
+                    job.action,
+                    targets,
+                )
+                if (!jobStore.write(storedJob)) {
                     mutableState.value = mutableState.value.copy(
-                        controlStatus = status,
-                        controlChecking = false,
-                        controlError = when {
-                            !status.commandAuthorityEnabled -> "Remote commands are disabled on this observer"
-                            !status.jobJournalAvailable -> "The controller job journal is unavailable; updates are disabled"
-                            else -> null
-                        },
-                    )
-                    if (mutableState.value.activeJob == null) {
-                        status.recentJobs.firstOrNull { it.id == status.activeJobId }?.let { job ->
-                            val requestId = job.requestId ?: return@let
-                            val targets = job.targetHostIds
-                            if (targets.isEmpty()) return@let
-                            val stored = StoredControlJob(endpoint, requireNotNull(ControlEndpointPolicy.baseForFeed(endpoint)), job.id, requestId, job.action, targets)
-                            if (!jobStore.write(stored)) {
-                                mutableState.value = mutableState.value.copy(
-                                    jobError = "Active job progress is visible but could not be saved for restart recovery",
-                                )
-                            }
-                            mutableState.value = mutableState.value.copy(activeJob = decorateJob(job))
-                            resumeStoredJob(stored)
-                        }
-                    }
-                }
-                .onFailure { error ->
-                    mutableState.value = mutableState.value.copy(
-                        controlStatus = null,
-                        controlChecking = false,
-                        controlError = safeMessage(error, "Controller unavailable"),
+                        jobError = "Active job progress is visible but could not be saved for restart recovery",
                     )
                 }
+                mutableState.value = mutableState.value.copy(activeJob = decorateJob(job))
+                resumeStoredJob(storedJob)
+            }
+        }
+        return status
+    }
+
+    private suspend fun refreshControllerFeedStrict(endpoint: String) = controllerFeedMutex.withLock {
+        val normalized = EndpointPolicy.normalize(endpoint)
+            ?: throw IOException("Paired controller feed endpoint is invalid")
+        if (!matchesPairedController(normalized, mutableState.value.controlEndpoint)) {
+            throw ControlProtocolException("Paired controller changed before its feed could be refreshed")
+        }
+        val result = controllerFeedLoader.live(normalized)
+        if (!matchesPairedController(normalized, mutableState.value.controlEndpoint)) {
+            throw ControlProtocolException("Paired controller changed while its feed was refreshing")
+        }
+        mutableState.value = mutableState.value.copy(controllerFeed = result.feed)
+    }
+
+    private suspend fun refreshControllerFeedBestEffort(endpoint: String) {
+        try {
+            refreshControllerFeedStrict(endpoint)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            // Preserve the last exact live controller snapshot until a later cycle succeeds.
         }
     }
 
@@ -511,8 +745,9 @@ class FleetlightViewModel(
     override fun onCleared() {
         endpointObservation?.close()
         autoRefreshJob?.cancel()
-        controlCheckJob?.cancel()
+        controlStatusJob?.cancel()
         jobPollingJob?.cancel()
+        updateCheckJob?.cancel()
         super.onCleared()
     }
 
@@ -521,6 +756,8 @@ class FleetlightViewModel(
         private const val JOB_POLL_MILLIS = 1_500L
         private const val MAX_JOB_POLL_MILLIS = 15_000L
         private const val RETRY_SUBMISSION_MILLIS = 10_000L
+        private const val PAIRING_WAIT_MESSAGE =
+            "Wait for the current fleet operation or update check to finish before pairing another controller"
         private val JOB_POLL_DEADLINE: Duration = Duration.ofHours(6)
         private val STALE_AFTER: Duration = Duration.ofMinutes(2)
 
@@ -540,3 +777,29 @@ private fun safeMessage(error: Throwable, fallback: String): String = error.mess
 
 private fun retryableSubmissionFailure(error: Throwable): Boolean =
     error is IOException || (error is ControlHttpException && error.status >= 500)
+
+internal fun shouldClearStoredCheckAfterFailure(activeCheck: ControlCheck?, error: Throwable): Boolean =
+    when {
+        retryableCheckRecoveryFailure(error) -> false
+        activeCheck?.state?.isTerminal == true -> true
+        error.message.orEmpty().contains("polling paused", ignoreCase = true) -> false
+        else -> true
+    }
+
+private fun retryableCheckRecoveryFailure(error: Throwable): Boolean =
+    error is IOException ||
+        (error is ControlHttpException && (error.status >= 500 || error.status == 408 || error.status == 429))
+
+internal fun pairingBlockedByControlWork(
+    state: FleetUiState,
+    hasStoredJob: Boolean,
+    hasStoredCheck: Boolean,
+): Boolean = hasStoredJob || hasStoredCheck ||
+    state.pairing ||
+    state.checkSyncPending ||
+    state.updateCheckSubmitting ||
+    state.activeJob?.state?.isTerminal == false ||
+    state.activeCheck?.state?.isTerminal == false
+
+internal fun matchesPairedController(expectedEndpoint: String, currentEndpoint: String?): Boolean =
+    EndpointPolicy.normalize(expectedEndpoint)?.let { it == currentEndpoint } == true

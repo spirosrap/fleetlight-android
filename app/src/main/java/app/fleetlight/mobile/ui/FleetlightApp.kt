@@ -82,6 +82,7 @@ import app.fleetlight.mobile.BuildConfig
 import app.fleetlight.mobile.data.EndpointPolicy
 import app.fleetlight.mobile.data.ControlAction
 import app.fleetlight.mobile.data.ControlCapability
+import app.fleetlight.mobile.data.ControlCheckState
 import app.fleetlight.mobile.data.ControlEndpointPolicy
 import app.fleetlight.mobile.data.ControlJob
 import app.fleetlight.mobile.data.ControlJobState
@@ -119,6 +120,7 @@ fun FleetlightApp(viewModel: FleetlightViewModel) {
     FleetlightContent(
         state = state,
         onRefresh = viewModel::refreshNow,
+        onCheckForUpdates = viewModel::checkForUpdates,
         onSaveEndpoints = viewModel::saveEndpoints,
         onConfirmPendingEndpoints = viewModel::confirmPendingEndpoints,
         onDismissPendingEndpoints = viewModel::dismissPendingEndpoints,
@@ -138,6 +140,7 @@ fun FleetlightApp(viewModel: FleetlightViewModel) {
 fun FleetlightContent(
     state: FleetUiState,
     onRefresh: () -> Unit,
+    onCheckForUpdates: () -> Unit,
     onSaveEndpoints: (List<String>) -> Unit,
     onConfirmPendingEndpoints: () -> Unit,
     onDismissPendingEndpoints: () -> Unit,
@@ -173,7 +176,7 @@ fun FleetlightContent(
                         if (state.refreshing) {
                             CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
                         } else {
-                            Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
+                            Icon(Icons.Outlined.Refresh, contentDescription = "Refresh fleet snapshot")
                         }
                     }
                 },
@@ -206,7 +209,7 @@ fun FleetlightContent(
             state.banner?.let { ConnectionBanner(state.connection, it) }
             when (selectedTab) {
                 AppTab.FLEET -> FleetScreen(state.feed, onHostClick = { selectedHost = it })
-                AppTab.UPDATES -> UpdatesScreen(state, onRequestUpdate, onDismissJob)
+                AppTab.UPDATES -> UpdatesScreen(state, onCheckForUpdates, onRequestUpdate, onDismissJob)
                 AppTab.EVENTS -> EventsScreen(state.feed)
                 AppTab.SETTINGS -> SettingsScreen(state, onSaveEndpoints, onStagePairing, onRevokeControl)
             }
@@ -540,10 +543,11 @@ private fun DetailRow(label: String, value: String) {
 @Composable
 private fun UpdatesScreen(
     state: FleetUiState,
+    onCheckForUpdates: () -> Unit,
     onRequestUpdate: (ControlAction, List<String>) -> Unit,
     onDismissJob: () -> Unit,
 ) {
-    val feed = state.feed
+    val feed = state.updatesFeed
     if (feed == null) {
         EmptyState(Icons.Outlined.SystemUpdateAlt, "No update data", "Connect a feed to view fleet update status.")
         return
@@ -552,11 +556,16 @@ private fun UpdatesScreen(
         state.controlStatus?.commandAuthorityEnabled == true &&
         state.controlStatus.jobJournalAvailable &&
         state.controlStatus.busy.not() &&
+        state.controlStatus.checkingUpdates.not() &&
+        !state.updateCheckSubmitting &&
+        !state.checkSyncPending &&
+        state.activeCheck?.state?.isTerminal != false &&
         state.activeJob?.state?.isTerminal != false
     LazyColumn(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item { UpdateCheckCard(state, onCheckForUpdates) }
         state.activeJob?.let { job ->
             item { JobProgressCard(job, state.jobError, onDismissJob) }
         }
@@ -607,6 +616,163 @@ private fun UpdatesScreen(
         } else {
             items(updates, key = LinuxUpdate::hostId) { update -> UpdateCard(update) }
         }
+    }
+}
+
+@Composable
+private fun UpdateCheckCard(state: FleetUiState, onCheckForUpdates: () -> Unit) {
+    val status = state.controlStatus
+    val localCheck = state.activeCheck
+    val running = state.updateCheckSubmitting || localCheck?.state?.isTerminal == false || status?.checkingUpdates == true
+    val canCheck = state.connection == FeedConnection.LIVE &&
+        status?.commandAuthorityEnabled == true &&
+        !running &&
+        !status.busy &&
+        state.activeJob?.state?.isTerminal != false
+    val resultTone = when (localCheck?.state) {
+        ControlCheckState.FAILED, ControlCheckState.PARTIAL, ControlCheckState.CANCELLED ->
+            MaterialTheme.colorScheme.errorContainer
+        ControlCheckState.SUCCEEDED -> MaterialTheme.colorScheme.secondaryContainer
+        ControlCheckState.QUEUED, ControlCheckState.RUNNING -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.surfaceContainer
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = resultTone)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Available versions", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(
+                        when {
+                            state.updateCheckSubmitting -> "Starting a live check…"
+                            localCheck?.state == ControlCheckState.QUEUED -> "Live check queued${localCheck.phase.asPhaseSuffix()}"
+                            localCheck?.state == ControlCheckState.RUNNING -> "Checking${localCheck.phase.asPhaseSuffix()}"
+                            status?.checkingUpdates == true -> "Controller is checking…"
+                            localCheck?.state == ControlCheckState.SUCCEEDED -> "Live check complete"
+                            localCheck?.state == ControlCheckState.PARTIAL -> "Check complete with some failures"
+                            localCheck?.state == ControlCheckState.FAILED -> "Live check failed"
+                            localCheck?.state == ControlCheckState.CANCELLED -> "Live check cancelled"
+                            else -> "Run a live controller check; the top refresh only reloads the fleet snapshot"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                FilledTonalButton(onClick = onCheckForUpdates, enabled = canCheck) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    } else {
+                        Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Checking…" else "Check for updates")
+                }
+            }
+            VersionCheckRow(
+                title = "Codex CLI",
+                latest = releaseVersionLabel(
+                    version = status?.latestCodexCliVersion,
+                    failed = status?.codexCliCheckFailed == true,
+                ),
+                checkedAt = status?.codexCliCheckedAt,
+                failed = status?.codexCliCheckFailed == true,
+            )
+            VersionCheckRow(
+                title = "Codex Mac app",
+                latest = releaseVersionLabel(
+                    version = status?.latestCodexMacAppVersion,
+                    build = status?.latestCodexMacAppBuild,
+                    failed = status?.codexMacAppCheckFailed == true,
+                ),
+                checkedAt = status?.codexMacAppCheckedAt,
+                failed = status?.codexMacAppCheckFailed == true,
+            )
+            val linuxSummary = linuxCheckPresentation(state.updatesFeed?.linuxUpdates.orEmpty())
+            VersionCheckRow(
+                title = "Linux packages",
+                latest = linuxSummary.countLabel,
+                checkedAt = linuxSummary.oldestCheckedAt,
+                failed = linuxSummary.incomplete,
+                failureLabel = "Check incomplete",
+            )
+            localCheck?.detail?.takeIf(String::isNotBlank)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall)
+            }
+            state.updateCheckError?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
+@Composable
+private fun VersionCheckRow(
+    title: String,
+    latest: String?,
+    checkedAt: Instant?,
+    failed: Boolean,
+    failureLabel: String = "Check failed",
+) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(
+                latest ?: if (failed) "Latest version unavailable" else "Latest version not checked",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            when {
+                checkedAt == null -> if (failed) failureLabel else "Not checked"
+                failed -> "Last attempt ${relativeTime(checkedAt)}"
+                else -> "Checked ${relativeTime(checkedAt)}"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun String?.asPhaseSuffix(): String = this?.trim()?.takeIf(String::isNotEmpty)?.let { " · ${it.replaceFirstChar(Char::uppercase)}" }.orEmpty()
+
+internal data class LinuxCheckPresentation(
+    val checkedCount: Int,
+    val totalCount: Int,
+    val incomplete: Boolean,
+    val oldestCheckedAt: Instant?,
+) {
+    val countLabel: String?
+        get() = if (totalCount == 0) null else
+            "$checkedCount of $totalCount machine${if (totalCount == 1) "" else "s"} checked"
+}
+
+internal fun linuxCheckPresentation(updates: List<LinuxUpdate>): LinuxCheckPresentation {
+    val verified = updates.filter { update ->
+        update.checkedAt != null && update.state.normalizedLinuxState() in LINUX_VERIFIED_STATES
+    }
+    val complete = updates.isNotEmpty() && verified.size == updates.size
+    return LinuxCheckPresentation(
+        checkedCount = verified.size,
+        totalCount = updates.size,
+        incomplete = updates.isNotEmpty() && !complete,
+        oldestCheckedAt = verified.mapNotNull(LinuxUpdate::checkedAt).minOrNull().takeIf { complete },
+    )
+}
+
+private fun String.normalizedLinuxState(): String = lowercase().replace("-", "").replace("_", "")
+
+private val LINUX_VERIFIED_STATES = setOf("current", "updateavailable", "updatesavailable")
+
+internal val FleetUiState.updatesFeed: MobileFeed?
+    get() = controllerFeed ?: feed
+
+internal fun releaseVersionLabel(version: String?, build: String? = null, failed: Boolean): String? {
+    val prefix = if (failed) "Last known" else "Latest"
+    return when {
+        version != null -> listOfNotNull("$prefix $version", build?.let { "build $it" }).joinToString(" · ")
+        build != null -> "$prefix build $build"
+        else -> null
     }
 }
 
@@ -1162,6 +1328,7 @@ private fun FleetPreview() {
         FleetlightContent(
             state = FleetUiState(feed = DemoFeed.value, connection = FeedConnection.LIVE),
             onRefresh = {},
+            onCheckForUpdates = {},
             onSaveEndpoints = {},
             onConfirmPendingEndpoints = {},
             onDismissPendingEndpoints = {},

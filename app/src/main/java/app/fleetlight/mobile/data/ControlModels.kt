@@ -1,6 +1,7 @@
 package app.fleetlight.mobile.data
 
 import java.time.Instant
+import java.util.UUID
 
 enum class ControlAction(val wireValue: String, val title: String) {
     CODEX_CLI("codex-cli", "Codex CLI"),
@@ -104,6 +105,15 @@ data class ControlStatus(
     val capabilities: List<ControlCapability> = emptyList(),
     val busy: Boolean = false,
     val activeJobId: String? = null,
+    val checkingUpdates: Boolean = false,
+    val activeCheckId: String? = null,
+    val latestCodexCliVersion: String? = null,
+    val codexCliCheckedAt: Instant? = null,
+    val codexCliCheckFailed: Boolean = false,
+    val latestCodexMacAppVersion: String? = null,
+    val latestCodexMacAppBuild: String? = null,
+    val codexMacAppCheckedAt: Instant? = null,
+    val codexMacAppCheckFailed: Boolean = false,
     val recentJobs: List<ControlJob> = emptyList(),
 )
 
@@ -116,6 +126,44 @@ data class ControlCapability(
     val codexMacAppUpdateAvailable: Boolean = false,
     val linuxUpdateAvailable: Boolean = false,
     val restartRequired: Boolean = false,
+    val linuxCheckedAt: Instant? = null,
+)
+
+enum class ControlCheckState {
+    QUEUED,
+    RUNNING,
+    SUCCEEDED,
+    PARTIAL,
+    FAILED,
+    CANCELLED,
+    UNKNOWN;
+
+    val isTerminal: Boolean
+        get() = this in setOf(SUCCEEDED, PARTIAL, FAILED, CANCELLED)
+
+    companion object {
+        fun fromWire(raw: String?): ControlCheckState = when (
+            raw?.lowercase()?.replace("-", "")?.replace("_", "")
+        ) {
+            "queued", "pending", "waiting" -> QUEUED
+            "running", "inprogress", "checking" -> RUNNING
+            "succeeded", "success", "completed", "complete" -> SUCCEEDED
+            "partial", "partiallyfailed", "partialsuccess" -> PARTIAL
+            "failed", "error" -> FAILED
+            "cancelled", "canceled" -> CANCELLED
+            else -> UNKNOWN
+        }
+    }
+}
+
+data class ControlCheck(
+    val id: String,
+    val requestId: String,
+    val state: ControlCheckState,
+    val phase: String? = null,
+    val detail: String? = null,
+    val startedAt: Instant? = null,
+    val finishedAt: Instant? = null,
 )
 
 fun ControlCapability.updateAvailable(action: ControlAction): Boolean = when (action) {
@@ -235,3 +283,14 @@ data class StoredControlJob(
     val action: ControlAction,
     val targetHostIds: List<String>,
 )
+
+data class StoredControlCheck(
+    val endpoint: String,
+    val controlBase: String,
+    val checkId: String?,
+    val requestId: String,
+)
+
+internal fun String.canonicalUuidOrNull(): UUID? = runCatching { UUID.fromString(this) }
+    .getOrNull()
+    ?.takeIf { it.toString().equals(this, ignoreCase = true) }

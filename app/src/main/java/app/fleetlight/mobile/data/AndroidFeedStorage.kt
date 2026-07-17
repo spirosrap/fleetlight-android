@@ -8,10 +8,12 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class FileFeedCache(context: Context) : FeedCache {
-    private val directory = File(context.filesDir, "feed-cache")
+class FileFeedCache(context: Context, namespace: String = "feed-cache") : FeedCache {
+    private val safeNamespace = namespace.takeIf { CACHE_NAMESPACE.matches(it) }
+        ?: throw IllegalArgumentException("Invalid feed cache namespace")
+    private val directory = File(context.filesDir, safeNamespace)
     private val feedFile = File(directory, "last-good-v1.json")
-    private val metadata = context.getSharedPreferences("feed-cache-metadata", Context.MODE_PRIVATE)
+    private val metadata = context.getSharedPreferences("$safeNamespace-metadata", Context.MODE_PRIVATE)
 
     override suspend fun read(): CachedFeed? = withContext(Dispatchers.IO) {
         if (!feedFile.isFile) return@withContext null
@@ -37,6 +39,10 @@ class FileFeedCache(context: Context) : FeedCache {
             putString("endpoint", value.endpoint)
             putString("savedAt", value.savedAt.toString())
         }
+    }
+
+    private companion object {
+        val CACHE_NAMESPACE = Regex("^[a-z0-9-]{1,48}$")
     }
 }
 

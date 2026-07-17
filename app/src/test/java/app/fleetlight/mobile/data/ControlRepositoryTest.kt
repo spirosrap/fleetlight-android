@@ -9,6 +9,7 @@ import org.junit.Test
 class ControlRepositoryTest {
     private val endpoint = "https://observer.example/fleetlight/mobile-feed.json"
     private val requestId = "00000000-0000-0000-0000-000000000001"
+    private val checkId = "10000000-0000-0000-0000-000000000001"
 
     @Test
     fun pairsAgainstPrefixedSameOriginAndPinsController() = runTest {
@@ -99,6 +100,76 @@ class ControlRepositoryTest {
         assertTrue(transport.requests.isEmpty())
     }
 
+    @Test
+    fun startsAndPollsAuthenticatedIdempotentUpdateCheck() = runTest {
+        val transport = QueueTransport(
+            mutableListOf(
+                checkJson(requestId, "queued"),
+                checkJson(requestId, "succeeded"),
+            ),
+        )
+        val repository = ControlRepository(transport, pairedCredentials())
+
+        val accepted = repository.createCheck(endpoint, requestId)
+        val completed = repository.check(endpoint, accepted.id, requestId)
+
+        assertEquals(ControlCheckState.QUEUED, accepted.state)
+        assertEquals(ControlCheckState.SUCCEEDED, completed.state)
+        assertEquals("POST", transport.requests[0].method)
+        assertEquals("https://observer.example/fleetlight/control/v1/checks", transport.requests[0].url)
+        assertEquals(requestId, transport.requests[0].idempotencyKey)
+        assertTrue(transport.requests[0].body.orEmpty().contains("\"requestId\":\"$requestId\""))
+        assertEquals("token-a", transport.requests[0].token)
+        assertEquals("GET", transport.requests[1].method)
+        assertEquals("https://observer.example/fleetlight/control/v1/checks/$checkId", transport.requests[1].url)
+    }
+
+    @Test
+    fun rejectsMismatchedCheckIdAndRequestIdentity() = runTest {
+        val wrongRequest = "00000000-0000-0000-0000-000000000002"
+        val repository = ControlRepository(
+            QueueTransport(mutableListOf(checkJson(wrongRequest, "queued"))),
+            pairedCredentials(),
+        )
+        assertThrows(ControlProtocolException::class.java) {
+            kotlinx.coroutines.runBlocking { repository.createCheck(endpoint, requestId) }
+        }
+
+        val wrongIdRepository = ControlRepository(
+            QueueTransport(mutableListOf(checkJson(requestId, "running", id = "10000000-0000-0000-0000-000000000002"))),
+            pairedCredentials(),
+        )
+        assertThrows(ControlProtocolException::class.java) {
+            kotlinx.coroutines.runBlocking { wrongIdRepository.check(endpoint, checkId, requestId) }
+        }
+    }
+
+    @Test
+    fun acceptsEquivalentUuidCaseFromSwiftController() = runTest {
+        val lowerRequest = "abcdefab-cdef-4abc-8def-abcdefabcdef"
+        val upperCheck = "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDE0"
+        val transport = QueueTransport(
+            mutableListOf(checkJson(lowerRequest.uppercase(), "queued", id = upperCheck)),
+        )
+        val repository = ControlRepository(transport, pairedCredentials())
+
+        val accepted = repository.createCheck(endpoint, lowerRequest)
+
+        assertEquals(upperCheck, accepted.id)
+        assertEquals(lowerRequest.uppercase(), accepted.requestId)
+    }
+
+    @Test
+    fun rejectsNonCanonicalUuidBeforeNetwork() = runTest {
+        val transport = QueueTransport(mutableListOf())
+        val repository = ControlRepository(transport, pairedCredentials())
+
+        assertThrows(IllegalArgumentException::class.java) {
+            kotlinx.coroutines.runBlocking { repository.createCheck(endpoint, "1-1-1-1-1") }
+        }
+        assertTrue(transport.requests.isEmpty())
+    }
+
     private fun pairedCredentials() = MemoryCredentials(
         ControlSession(
             authority = "observer.example",
@@ -127,4 +198,7 @@ class ControlRepositoryTest {
 
     private fun jobJson(requestId: String, action: String, targets: List<String>): String =
         """{"id":"job-a","requestId":"$requestId","action":"$action","targetHostIds":[${targets.joinToString { "\"$it\"" }}],"state":"queued","completed":0,"total":${targets.size},"progress":[]}"""
+
+    private fun checkJson(requestId: String, state: String, id: String = checkId): String =
+        """{"id":"$id","requestId":"$requestId","state":"$state","phase":"versions","detail":"Checking versions"}"""
 }

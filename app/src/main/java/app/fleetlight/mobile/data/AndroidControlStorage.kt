@@ -162,3 +162,38 @@ class ControlJobStore(context: Context) {
 
     fun clear(): Boolean = preferences.edit().clear().commit()
 }
+
+class ControlCheckStore(context: Context) {
+    private val preferences = context.getSharedPreferences("control-active-check", Context.MODE_PRIVATE)
+
+    fun read(): StoredControlCheck? {
+        val rawEndpoint = preferences.getString("endpoint", null) ?: return null
+        val stored = runCatching {
+            val normalizedEndpoint = requireNotNull(EndpointPolicy.normalize(rawEndpoint))
+            val controlBase = requireNotNull(preferences.getString("controlBase", null))
+            require(ControlEndpointPolicy.baseForFeed(normalizedEndpoint) == controlBase)
+            val requestId = requireNotNull(preferences.getString("requestId", null))
+            require(requestId.canonicalUuidOrNull() != null)
+            val checkId = preferences.getString("checkId", null)
+            require(checkId == null || checkId.canonicalUuidOrNull() != null)
+            StoredControlCheck(normalizedEndpoint, controlBase, checkId, requestId)
+        }.getOrNull()
+        if (stored == null) clear()
+        return stored
+    }
+
+    fun write(check: StoredControlCheck): Boolean {
+        require(EndpointPolicy.normalize(check.endpoint) == check.endpoint)
+        require(ControlEndpointPolicy.baseForFeed(check.endpoint) == check.controlBase)
+        require(check.requestId.canonicalUuidOrNull() != null)
+        require(check.checkId == null || check.checkId.canonicalUuidOrNull() != null)
+        return preferences.edit()
+            .putString("endpoint", check.endpoint)
+            .putString("controlBase", check.controlBase)
+            .putString("checkId", check.checkId)
+            .putString("requestId", check.requestId)
+            .commit()
+    }
+
+    fun clear(): Boolean = preferences.edit().clear().commit()
+}

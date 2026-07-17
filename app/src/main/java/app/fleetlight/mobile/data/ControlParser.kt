@@ -44,6 +44,7 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
                 codexMacAppUpdateAvailable = value.boolean("codexMacAppUpdateAvailable") ?: false,
                 linuxUpdateAvailable = value.boolean("linuxUpdateAvailable") ?: false,
                 restartRequired = value.boolean("restartRequired") ?: false,
+                linuxCheckedAt = value.instant("linuxCheckedAt"),
             )
         }
         if (authorityEnabled && capabilities.isEmpty()) {
@@ -75,7 +76,42 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
             capabilities = capabilities,
             busy = root.boolean("busy") ?: false,
             activeJobId = root.text("activeJobId"),
+            checkingUpdates = root.boolean("checkingUpdates") ?: false,
+            activeCheckId = root.text("activeCheckId"),
+            latestCodexCliVersion = root.text("latestCodexCliVersion")?.take(MAX_VERSION_LENGTH),
+            codexCliCheckedAt = root.instant("codexCliCheckedAt"),
+            codexCliCheckFailed = root.boolean("codexCliCheckFailed") ?: false,
+            latestCodexMacAppVersion = root.text("latestCodexMacAppVersion")?.take(MAX_VERSION_LENGTH),
+            latestCodexMacAppBuild = root.text("latestCodexMacAppBuild")?.take(MAX_BUILD_LENGTH),
+            codexMacAppCheckedAt = root.instant("codexMacAppCheckedAt"),
+            codexMacAppCheckFailed = root.boolean("codexMacAppCheckFailed") ?: false,
             recentJobs = recentJobs.map { it.withCapabilityNames(capabilities) },
+        )
+    }
+
+    fun check(raw: String): ControlCheck {
+        val envelope = objectRoot(raw)
+        val root = envelope.objectValue("check") ?: envelope
+        val id = root.text("id")
+            ?: throw ControlProtocolException("Update check response did not include an id")
+        val requestId = root.text("requestId")
+            ?: throw ControlProtocolException("Update check response did not include a request id")
+        val state = ControlCheckState.fromWire(root.text("state"))
+        if (state == ControlCheckState.UNKNOWN) {
+            throw ControlProtocolException("Update check response had an invalid state")
+        }
+        val phase = root.text("phase")
+            ?: throw ControlProtocolException("Update check response did not include a phase")
+        val detail = root.text("detail")
+            ?: throw ControlProtocolException("Update check response did not include detail")
+        return ControlCheck(
+            id = id,
+            requestId = requestId,
+            state = state,
+            phase = phase.take(MAX_PHASE_LENGTH),
+            detail = detail.take(MAX_MESSAGE_LENGTH),
+            startedAt = root.strictInstant("startedAt"),
+            finishedAt = root.strictInstant("finishedAt"),
         )
     }
 
@@ -126,6 +162,9 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
     private companion object {
         const val MAX_MESSAGE_LENGTH = 400
         const val MAX_TOKEN_LENGTH = 4096
+        const val MAX_VERSION_LENGTH = 80
+        const val MAX_BUILD_LENGTH = 40
+        const val MAX_PHASE_LENGTH = 80
     }
 }
 
@@ -151,4 +190,11 @@ private fun JsonObject.stringArray(vararg keys: String): List<String> =
 
 private fun JsonObject.instant(vararg keys: String): Instant? = text(*keys)?.let { raw ->
     runCatching { Instant.parse(raw) }.getOrNull()
+}
+
+private fun JsonObject.strictInstant(key: String): Instant? {
+    val raw = text(key) ?: return null
+    return runCatching { Instant.parse(raw) }.getOrElse {
+        throw ControlProtocolException("Update check response had an invalid $key timestamp")
+    }
 }

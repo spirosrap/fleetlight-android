@@ -40,7 +40,7 @@ class ControlCheckOrchestrator(
             if (updated == null) {
                 val error = requireNotNull(result.exceptionOrNull())
                 if (error is CancellationException) throw error
-                if (!error.isRetryableCheckFailure() || ++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                if (!error.isRetryableControlFailure() || ++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                     throw error
                 }
                 nextDelay = (nextDelay * 2).coerceAtMost(MAX_POLL_INTERVAL_MILLIS)
@@ -59,11 +59,12 @@ class ControlCheckOrchestrator(
         return check
     }
 
-    private fun Throwable.isRetryableCheckFailure(): Boolean =
-        this is IOException || (this is ControlHttpException && status >= 500)
-
     private companion object {
         const val MAX_CONSECUTIVE_FAILURES = 5
         const val MAX_POLL_INTERVAL_MILLIS = 15_000L
     }
 }
+
+internal fun Throwable.isRetryableControlFailure(): Boolean =
+    this is IOException ||
+        (this is ControlHttpException && (status == 408 || status == 429 || status >= 500))

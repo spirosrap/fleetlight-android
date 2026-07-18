@@ -49,6 +49,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -640,7 +641,7 @@ private fun UpdateCheckCard(state: FleetUiState, onCheckForUpdates: () -> Unit) 
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Available versions", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Check all", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     Text(
                         when {
                             state.updateCheckSubmitting -> "Starting a live check…"
@@ -651,7 +652,7 @@ private fun UpdateCheckCard(state: FleetUiState, onCheckForUpdates: () -> Unit) 
                             localCheck?.state == ControlCheckState.PARTIAL -> "Check complete with some failures"
                             localCheck?.state == ControlCheckState.FAILED -> "Live check failed"
                             localCheck?.state == ControlCheckState.CANCELLED -> "Live check cancelled"
-                            else -> "Run a live controller check; the top refresh only reloads the fleet snapshot"
+                            else -> "Audit installed versions, Linux packages, and available releases; the top refresh only reloads the snapshot"
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -665,8 +666,35 @@ private fun UpdateCheckCard(state: FleetUiState, onCheckForUpdates: () -> Unit) 
                         Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text(if (running) "Checking…" else "Check for updates")
+                    Text(if (running) "Checking…" else "Check all")
                 }
+            }
+            val progressPresentation = checkProgressPresentation(localCheck)
+            when {
+                progressPresentation.fraction != null -> {
+                    LinearProgressIndicator(
+                        progress = { progressPresentation.fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                running -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            progressPresentation.countLabel?.let { countLabel ->
+                Text(
+                    countLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            progressPresentation.currentLabel?.let { currentLabel ->
+                Text(currentLabel, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            }
+            progressPresentation.currentDetail?.let { currentDetail ->
+                Text(
+                    currentDetail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             VersionCheckRow(
                 title = "Codex CLI",
@@ -735,6 +763,35 @@ private fun VersionCheckRow(
 }
 
 private fun String?.asPhaseSuffix(): String = this?.trim()?.takeIf(String::isNotEmpty)?.let { " · ${it.replaceFirstChar(Char::uppercase)}" }.orEmpty()
+
+internal data class CheckProgressPresentation(
+    val fraction: Float?,
+    val countLabel: String?,
+    val currentLabel: String?,
+    val currentDetail: String?,
+)
+
+internal fun checkProgressPresentation(check: app.fleetlight.mobile.data.ControlCheck?): CheckProgressPresentation {
+    if (check == null) return CheckProgressPresentation(null, null, null, null)
+    val total = check.total?.takeIf { it > 0 }
+    val completed = check.completed?.coerceIn(0, total ?: Int.MAX_VALUE)
+    val current = check.progress.firstOrNull { it.state == app.fleetlight.mobile.data.ControlCheckProgressState.RUNNING }
+        ?: check.progress.firstOrNull { it.state == app.fleetlight.mobile.data.ControlCheckProgressState.QUEUED }
+        ?: check.progress.firstOrNull {
+            it.state == app.fleetlight.mobile.data.ControlCheckProgressState.FAILED ||
+                it.state == app.fleetlight.mobile.data.ControlCheckProgressState.PARTIAL
+        }
+        ?: check.progress.lastOrNull()
+    return CheckProgressPresentation(
+        fraction = if (total != null && completed != null) completed.toFloat() / total.toFloat() else null,
+        countLabel = if (total != null && completed != null) "$completed of $total stages complete" else null,
+        currentLabel = current?.let { "${it.name} · ${it.state.displayLabel}" },
+        currentDetail = current?.detail,
+    )
+}
+
+private val app.fleetlight.mobile.data.ControlCheckProgressState.displayLabel: String
+    get() = name.lowercase().replaceFirstChar(Char::uppercase)
 
 internal data class LinuxCheckPresentation(
     val checkedCount: Int,

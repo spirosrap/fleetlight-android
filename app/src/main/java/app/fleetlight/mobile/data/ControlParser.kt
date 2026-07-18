@@ -104,6 +104,23 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
             ?: throw ControlProtocolException("Update check response did not include a phase")
         val detail = root.text("detail")
             ?: throw ControlProtocolException("Update check response did not include detail")
+        val total = root.integer("total")?.coerceIn(0, MAX_CHECK_TOTAL)
+        val completed = root.integer("completed")?.coerceIn(0, total ?: MAX_CHECK_TOTAL)
+        val progress = root.arrayValue("progress")
+            .take(MAX_CHECK_PROGRESS_ITEMS)
+            .mapNotNull { element ->
+                val value = element as? JsonObject ?: return@mapNotNull null
+                val progressState = ControlCheckProgressState.fromWire(value.text("state"))
+                    ?: return@mapNotNull null
+                ControlCheckProgress(
+                    id = value.text("id")?.take(MAX_PROGRESS_ID_LENGTH) ?: return@mapNotNull null,
+                    name = value.text("name")?.take(MAX_PROGRESS_NAME_LENGTH) ?: return@mapNotNull null,
+                    category = value.text("category")?.take(MAX_PROGRESS_CATEGORY_LENGTH) ?: return@mapNotNull null,
+                    state = progressState,
+                    detail = value.text("detail")?.take(MAX_MESSAGE_LENGTH) ?: return@mapNotNull null,
+                )
+            }
+            .distinctBy(ControlCheckProgress::id)
         return ControlCheck(
             id = id,
             requestId = requestId,
@@ -112,6 +129,9 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
             detail = detail.take(MAX_MESSAGE_LENGTH),
             startedAt = root.strictInstant("startedAt"),
             finishedAt = root.strictInstant("finishedAt"),
+            completed = completed,
+            total = total,
+            progress = progress,
         )
     }
 
@@ -165,6 +185,11 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
         const val MAX_VERSION_LENGTH = 80
         const val MAX_BUILD_LENGTH = 40
         const val MAX_PHASE_LENGTH = 80
+        const val MAX_CHECK_TOTAL = 64
+        const val MAX_CHECK_PROGRESS_ITEMS = 32
+        const val MAX_PROGRESS_ID_LENGTH = 80
+        const val MAX_PROGRESS_NAME_LENGTH = 120
+        const val MAX_PROGRESS_CATEGORY_LENGTH = 48
     }
 }
 

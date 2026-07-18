@@ -10,16 +10,17 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - Issue-first Fleet view with separate Offline, Slow, Access, Alert, Update, and Restart signals
 - Per-machine details for latency, health, resources, services, warnings, software versions, and restart status
 - Always-visible per-machine installed versions and availability for Codex CLI, Codex Mac app, and Linux OS, with individual Install or Update controls
-- Authenticated **Check for updates** with live controller progress, exact latest Codex versions, check freshness, Linux verification coverage, and resilient process-death recovery
+- Authenticated **Check all** audit with determinate stage progress on compatible controllers, exact latest Codex versions, check freshness, Linux verification coverage, and resilient process-death recovery
 - Sequential Update all for eligible updates, plus Linux restart controls that intentionally operate on exactly one machine at a time
 - Exact confirmation before every update or restart, durable job progress, partial-result reporting, and idempotent recovery
 - Read-only status and Events remain available without command pairing
 - Up to four runtime-configured HTTPS endpoints; the freshest valid schema 1 response wins
-- Lightweight fleet-snapshot refresh every 60 seconds, manual snapshot refresh, atomic last-good caching, and clear stale/offline state
+- Lightweight fleet-snapshot refresh every 60 seconds, manual snapshot refresh, serialized crash-safe atomic last-good caching, and clear stale/offline state
+- Safe retry of transient controller timeouts and rate limits using the original idempotency identity
 - `fleetlight://configure` endpoint links without compiling private addresses into the app
 - Optional stable release signing from an ignored properties file or environment variables
 
-- Version: **1.3.0 (4)**
+- Version: **1.4.0 (5)**
 - Application ID: `app.fleetlight.mobile`
 - Minimum Android: 8.0 / API 26
 - Compile and target SDK: 36
@@ -44,7 +45,7 @@ The app derives the same-origin control route while preserving the feed prefix: 
 
 Each update sends one fixed action (`codex-cli`, `codex-mac-app`, or `linux-os`) and an exact list of eligible machine IDs. “Update all” is one server-side sequential job. A Linux restart uses the separate `restart-linux` action and is accepted only for exactly one machine that currently reports restart required; there is deliberately no restart-all control. Before restarting, Fleetlight names the target and warns that active work and services will be interrupted while the controller waits for the machine to go offline and return. A UUID request is persisted before submission; if a response is lost, recovery uses the same idempotency key rather than creating a second job.
 
-The top refresh icon only reloads the lightweight fleet snapshot. **Updates → Check for updates** starts a separate authenticated, read-only controller job that freshly probes installed versions, the Codex CLI registry, the official Codex Mac app feed, and configured Linux package sources. Android shows each phase, polls the same idempotent request across disconnects or process restarts, and reloads the paired controller's exact feed before reporting completion. The check never installs an update or restarts a machine.
+The top refresh icon only reloads the lightweight fleet snapshot. **Updates → Check all** starts a separate authenticated, read-only controller audit that freshly probes installed versions, the Codex CLI registry, the official Codex Mac app feed, and configured Linux package sources. Compatible controllers report three bounded stages—Installed versions, Linux packages, and Publish results—so Android can show determinate completed/total progress and the current stage. Older controllers remain compatible and use indeterminate progress. Android polls the same idempotent request across disconnects or process restarts, safely retries transient timeouts and rate limits, and reloads the paired controller's exact feed before reporting completion. The audit never installs an update or restarts a machine.
 
 ## Feed contract
 

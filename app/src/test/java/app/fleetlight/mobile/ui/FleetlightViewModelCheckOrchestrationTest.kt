@@ -3,6 +3,7 @@ package app.fleetlight.mobile.ui
 import app.fleetlight.mobile.data.ControlCheckOrchestrator
 import app.fleetlight.mobile.data.ControlCheckState
 import app.fleetlight.mobile.data.ControlCheck
+import app.fleetlight.mobile.data.ControlAction
 import app.fleetlight.mobile.data.ControlHttpException
 import app.fleetlight.mobile.data.ControlProtocolException
 import app.fleetlight.mobile.data.ControlCredentialStore
@@ -11,11 +12,15 @@ import app.fleetlight.mobile.data.ControlRepository
 import app.fleetlight.mobile.data.ControlSession
 import app.fleetlight.mobile.data.ControlTransport
 import app.fleetlight.mobile.data.StoredControlCheck
+import app.fleetlight.mobile.data.StoredControlJob
+import app.fleetlight.mobile.data.isRetryableControlFailure
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.CancellationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class FleetlightViewModelCheckOrchestrationTest {
@@ -192,9 +197,75 @@ class FleetlightViewModelCheckOrchestrationTest {
         assertTrue(statusAttempted)
         assertFalse(shouldClearStoredCheckAfterFailure(active, requireNotNull(failure)))
         assertFalse(shouldClearStoredCheckAfterFailure(active, ControlHttpException(503, "unavailable")))
+        assertFalse(shouldClearStoredCheckAfterFailure(active, ControlHttpException(408, "timeout")))
+        assertFalse(shouldClearStoredCheckAfterFailure(active, ControlHttpException(429, "slow down")))
         assertTrue(shouldClearStoredCheckAfterFailure(active, ControlHttpException(401, "expired token")))
         assertTrue(shouldClearStoredCheckAfterFailure(active, ControlHttpException(404, "check expired")))
         assertTrue(shouldClearStoredCheckAfterFailure(active, ControlProtocolException("mismatched response")))
+    }
+
+    @Test
+    fun liveCheckRetriesRateLimitWithTheSameIdentity() = runTest {
+        var call = 0
+        val transport = ControlTransport { request ->
+            when (call++) {
+                0 -> checkJson("queued", "queued")
+                1 -> throw ControlHttpException(429, "slow down")
+                else -> checkJson("succeeded", "complete")
+            }
+        }
+        val orchestrator = ControlCheckOrchestrator(
+            repository = ControlRepository(transport, Credentials()),
+            pause = {},
+            pollIntervalMillis = 0,
+            maximumPolls = 3,
+        )
+
+        val completed = orchestrator.execute(
+            stored = StoredControlCheck(
+                endpoint,
+                "https://observer.example/fleetlight/control/v1",
+                null,
+                requestId,
+            ),
+            refreshFeed = {},
+            refreshStatus = {},
+        )
+
+        assertEquals(ControlCheckState.SUCCEEDED, completed.state)
+        assertEquals(3, call)
+        assertTrue(ControlHttpException(408, "timeout").isRetryableControlFailure())
+        assertTrue(ControlHttpException(429, "slow down").isRetryableControlFailure())
+        assertTrue(ControlHttpException(503, "offline").isRetryableControlFailure())
+        assertFalse(ControlHttpException(409, "busy").isRetryableControlFailure())
+    }
+
+    @Test
+    fun storedJobLookupRetryPreservesTheExactAcceptedOperationIdentity() {
+        val stored = StoredControlJob(
+            endpoint = endpoint,
+            controlBase = "https://observer.example/fleetlight/control/v1",
+            jobId = "20000000-0000-0000-0000-000000000001",
+            requestId = requestId,
+            action = ControlAction.LINUX_OS,
+            targetHostIds = listOf("host-a", "host-b"),
+        )
+
+        listOf(
+            java.io.IOException("offline"),
+            ControlHttpException(408, "timeout"),
+            ControlHttpException(429, "slow down"),
+            ControlHttpException(503, "unavailable"),
+        ).forEach { error ->
+            val retry = storedJobRetryAfterLookupFailure(stored, error)
+            assertSame(stored, retry)
+            assertEquals(stored.jobId, retry?.jobId)
+            assertEquals(stored.requestId, retry?.requestId)
+            assertEquals(stored.action, retry?.action)
+            assertEquals(stored.targetHostIds, retry?.targetHostIds)
+        }
+        assertNull(storedJobRetryAfterLookupFailure(stored, ControlHttpException(401, "expired")))
+        assertNull(storedJobRetryAfterLookupFailure(stored, ControlHttpException(404, "missing")))
     }
 
     private class Credentials : ControlCredentialStore {

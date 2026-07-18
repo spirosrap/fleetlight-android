@@ -161,10 +161,14 @@ class ControlParserTest {
     @Test
     fun parsesCheckEnvelopeAndRejectsMalformedTerminalData() {
         val check = parser.check(
-            """{"check":{"id":"check-a","requestId":"00000000-0000-0000-0000-000000000001","state":"partial","phase":"linux","detail":"One host offline","startedAt":"2026-07-17T10:00:00Z","finishedAt":"2026-07-17T10:01:00Z"}}""",
+            """{"check":{"id":"check-a","requestId":"00000000-0000-0000-0000-000000000001","state":"partial","phase":"linux","detail":"One host offline","startedAt":"2026-07-17T10:00:00Z","finishedAt":"2026-07-17T10:01:00Z","completed":2,"total":3,"progress":[{"id":"fleet","name":"Installed versions","category":"fleet","state":"succeeded","detail":"Versions checked"},{"id":"linux","name":"Linux packages","category":"linux","state":"partial","detail":"One host offline"},{"id":"publishing","name":"Publish results","category":"publishing","state":"queued","detail":"Waiting"}]}}""",
         )
         assertEquals(ControlCheckState.PARTIAL, check.state)
         assertEquals("linux", check.phase)
+        assertEquals(2, check.completed)
+        assertEquals(3, check.total)
+        assertEquals(listOf("fleet", "linux", "publishing"), check.progress.map { it.id })
+        assertEquals(ControlCheckProgressState.PARTIAL, check.progress[1].state)
         assertTrue(check.state.isTerminal)
 
         assertThrows(ControlProtocolException::class.java) {
@@ -176,5 +180,28 @@ class ControlParserTest {
         assertThrows(ControlProtocolException::class.java) {
             parser.check("""{"id":"check-a","requestId":"00000000-0000-0000-0000-000000000001","state":"running","phase":"linux"}""")
         }
+    }
+
+    @Test
+    fun checkProgressIsOptionalBoundedClampedAndDropsMalformedItems() {
+        val legacy = parser.check(
+            """{"id":"check-a","requestId":"00000000-0000-0000-0000-000000000001","state":"running","phase":"fleet","detail":"Checking"}""",
+        )
+        assertEquals(null, legacy.completed)
+        assertEquals(null, legacy.total)
+        assertTrue(legacy.progress.isEmpty())
+
+        val entries = (0 until 40).joinToString(",") { index ->
+            """{"id":"stage-$index","name":"Stage $index","category":"fleet","state":"running","detail":"Checking $index"}"""
+        }
+        val bounded = parser.check(
+            """{"id":"check-a","requestId":"00000000-0000-0000-0000-000000000001","state":"running","phase":"fleet","detail":"Checking","completed":999,"total":999,"progress":[$entries,{"id":"broken","name":"Broken","category":"fleet","state":"mystery","detail":"No"}]}""",
+        )
+
+        assertEquals(64, bounded.total)
+        assertEquals(64, bounded.completed)
+        assertEquals(32, bounded.progress.size)
+        assertEquals("stage-0", bounded.progress.first().id)
+        assertEquals("stage-31", bounded.progress.last().id)
     }
 }

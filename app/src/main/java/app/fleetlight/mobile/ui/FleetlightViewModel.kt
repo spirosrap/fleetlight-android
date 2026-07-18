@@ -25,6 +25,7 @@ import app.fleetlight.mobile.data.EndpointPolicy
 import app.fleetlight.mobile.data.EndpointStore
 import app.fleetlight.mobile.data.eligibleFor
 import app.fleetlight.mobile.data.safeHostName
+import app.fleetlight.mobile.data.isRetryableControlFailure
 import app.fleetlight.mobile.data.withCapabilityNames
 import app.fleetlight.mobile.data.FeedRefreshResult
 import app.fleetlight.mobile.data.FeedRepository
@@ -400,8 +401,15 @@ class FleetlightViewModel(
                 accepted = lookup.getOrNull()
                 if (accepted == null) {
                     val error = requireNotNull(lookup.exceptionOrNull())
-                    if (!retryableSubmissionFailure(error)) jobStore.clear()
-                    mutableState.value = mutableState.value.copy(jobError = safeMessage(error, "Unable to resume progress"))
+                    val retry = storedJobRetryAfterLookupFailure(stored, error)
+                    if (retry != null) {
+                        scheduleSubmissionRetry(retry, error, recoveringProgress = true)
+                    } else {
+                        jobStore.clear()
+                        mutableState.value = mutableState.value.copy(
+                            jobError = safeMessage(error, "Unable to resume progress"),
+                        )
+                    }
                     return@launch
                 }
             } else {
@@ -446,9 +454,17 @@ class FleetlightViewModel(
         }
     }
 
-    private suspend fun scheduleSubmissionRetry(stored: StoredControlJob, error: Throwable) {
+    private suspend fun scheduleSubmissionRetry(
+        stored: StoredControlJob,
+        error: Throwable,
+        recoveringProgress: Boolean = false,
+    ) {
         mutableState.value = mutableState.value.copy(
-            jobError = "Submission status is uncertain; Fleetlight will retry only this same request. ${safeMessage(error, "")}".trim(),
+            jobError = if (recoveringProgress) {
+                "Progress is temporarily unavailable; Fleetlight will retry this same operation. ${safeMessage(error, "")}".trim()
+            } else {
+                "Submission status is uncertain; Fleetlight will retry only this same request. ${safeMessage(error, "")}".trim()
+            },
         )
         delay(RETRY_SUBMISSION_MILLIS)
         resumeStoredJob(stored)
@@ -776,7 +792,12 @@ private fun safeMessage(error: Throwable, fallback: String): String = error.mess
     ?: fallback
 
 private fun retryableSubmissionFailure(error: Throwable): Boolean =
-    error is IOException || (error is ControlHttpException && error.status >= 500)
+    error.isRetryableControlFailure()
+
+internal fun storedJobRetryAfterLookupFailure(
+    stored: StoredControlJob,
+    error: Throwable,
+): StoredControlJob? = stored.takeIf { retryableSubmissionFailure(error) }
 
 internal fun shouldClearStoredCheckAfterFailure(activeCheck: ControlCheck?, error: Throwable): Boolean =
     when {
@@ -787,8 +808,7 @@ internal fun shouldClearStoredCheckAfterFailure(activeCheck: ControlCheck?, erro
     }
 
 private fun retryableCheckRecoveryFailure(error: Throwable): Boolean =
-    error is IOException ||
-        (error is ControlHttpException && (error.status >= 500 || error.status == 408 || error.status == 429))
+    error.isRetryableControlFailure()
 
 internal fun pairingBlockedByControlWork(
     state: FleetUiState,

@@ -156,6 +156,35 @@ enum class ControlCheckState {
     }
 }
 
+enum class ControlCheckProgressState {
+    QUEUED,
+    RUNNING,
+    SUCCEEDED,
+    PARTIAL,
+    FAILED;
+
+    companion object {
+        fun fromWire(raw: String?): ControlCheckProgressState? = when (
+            raw?.lowercase()?.replace("-", "")?.replace("_", "")
+        ) {
+            "queued", "pending", "waiting" -> QUEUED
+            "running", "inprogress", "checking" -> RUNNING
+            "succeeded", "success", "completed", "complete" -> SUCCEEDED
+            "partial", "partiallyfailed", "partialsuccess" -> PARTIAL
+            "failed", "error" -> FAILED
+            else -> null
+        }
+    }
+}
+
+data class ControlCheckProgress(
+    val id: String,
+    val name: String,
+    val category: String,
+    val state: ControlCheckProgressState,
+    val detail: String,
+)
+
 data class ControlCheck(
     val id: String,
     val requestId: String,
@@ -164,6 +193,9 @@ data class ControlCheck(
     val detail: String? = null,
     val startedAt: Instant? = null,
     val finishedAt: Instant? = null,
+    val completed: Int? = null,
+    val total: Int? = null,
+    val progress: List<ControlCheckProgress> = emptyList(),
 )
 
 fun ControlCapability.updateAvailable(action: ControlAction): Boolean = when (action) {

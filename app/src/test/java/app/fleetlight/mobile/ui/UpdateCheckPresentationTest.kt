@@ -1,6 +1,10 @@
 package app.fleetlight.mobile.ui
 
 import app.fleetlight.mobile.data.LinuxUpdate
+import app.fleetlight.mobile.data.ControlCheck
+import app.fleetlight.mobile.data.ControlCheckProgress
+import app.fleetlight.mobile.data.ControlCheckProgressState
+import app.fleetlight.mobile.data.ControlCheckState
 import app.fleetlight.mobile.data.FeedObserver
 import app.fleetlight.mobile.data.FleetSummary
 import app.fleetlight.mobile.data.MobileFeed
@@ -12,6 +16,48 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UpdateCheckPresentationTest {
+    @Test
+    fun liveAuditShowsDeterminateStageProgressAndCurrentItem() {
+        val presentation = checkProgressPresentation(
+            ControlCheck(
+                id = "check-a",
+                requestId = "00000000-0000-0000-0000-000000000001",
+                state = ControlCheckState.RUNNING,
+                phase = "linux",
+                detail = "Checking Linux packages",
+                completed = 1,
+                total = 3,
+                progress = listOf(
+                    ControlCheckProgress("fleet", "Installed versions", "fleet", ControlCheckProgressState.SUCCEEDED, "Checked"),
+                    ControlCheckProgress("linux", "Linux packages", "linux", ControlCheckProgressState.RUNNING, "Checking six machines"),
+                    ControlCheckProgress("publishing", "Publish results", "publishing", ControlCheckProgressState.QUEUED, "Waiting"),
+                ),
+            ),
+        )
+
+        assertEquals(1f / 3f, presentation.fraction)
+        assertEquals("1 of 3 stages complete", presentation.countLabel)
+        assertEquals("Linux packages · Running", presentation.currentLabel)
+        assertEquals("Checking six machines", presentation.currentDetail)
+    }
+
+    @Test
+    fun legacyLiveAuditFallsBackToIndeterminateProgress() {
+        val presentation = checkProgressPresentation(
+            ControlCheck(
+                id = "check-a",
+                requestId = "00000000-0000-0000-0000-000000000001",
+                state = ControlCheckState.RUNNING,
+                phase = "linux",
+                detail = "Checking",
+            ),
+        )
+
+        assertNull(presentation.fraction)
+        assertNull(presentation.countLabel)
+        assertNull(presentation.currentLabel)
+    }
+
     @Test
     fun updatesKeepControllerFeedWhenMainObserverBecomesNewer() {
         val controller = feed("Controller", "2026-07-17T10:00:00Z")

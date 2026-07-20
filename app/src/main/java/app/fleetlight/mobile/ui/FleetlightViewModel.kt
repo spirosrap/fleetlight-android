@@ -459,14 +459,17 @@ class FleetlightViewModel(
         error: Throwable,
         recoveringProgress: Boolean = false,
     ) {
+        val controllerBusy = error.isControllerBusyFailure()
         mutableState.value = mutableState.value.copy(
-            jobError = if (recoveringProgress) {
+            jobError = if (controllerBusy) {
+                "Waiting for the current fleet operation to finish. This update will start automatically."
+            } else if (recoveringProgress) {
                 "Progress is temporarily unavailable; Fleetlight will retry this same operation. ${safeMessage(error, "")}".trim()
             } else {
                 "Submission status is uncertain; Fleetlight will retry only this same request. ${safeMessage(error, "")}".trim()
             },
         )
-        delay(RETRY_SUBMISSION_MILLIS)
+        delay(if (controllerBusy) BUSY_RETRY_MILLIS else RETRY_SUBMISSION_MILLIS)
         resumeStoredJob(stored)
     }
 
@@ -771,6 +774,7 @@ class FleetlightViewModel(
         private const val AUTO_REFRESH_MILLIS = 60_000L
         private const val JOB_POLL_MILLIS = 1_500L
         private const val MAX_JOB_POLL_MILLIS = 15_000L
+        private const val BUSY_RETRY_MILLIS = 2_500L
         private const val RETRY_SUBMISSION_MILLIS = 10_000L
         private const val PAIRING_WAIT_MESSAGE =
             "Wait for the current fleet operation or update check to finish before pairing another controller"
@@ -792,7 +796,10 @@ private fun safeMessage(error: Throwable, fallback: String): String = error.mess
     ?: fallback
 
 private fun retryableSubmissionFailure(error: Throwable): Boolean =
-    error.isRetryableControlFailure()
+    error.isRetryableControlFailure() || error.isControllerBusyFailure()
+
+internal fun Throwable.isControllerBusyFailure(): Boolean =
+    this is ControlHttpException && status == 409 && errorCode == "controller-busy"
 
 internal fun storedJobRetryAfterLookupFailure(
     stored: StoredControlJob,

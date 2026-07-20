@@ -71,7 +71,9 @@ class ControlParserTest {
 
     @Test
     fun parsesNestedErrorMessage() {
-        assertEquals("Controller busy", parser.errorMessage("""{"error":{"code":"busy","message":"Controller busy"}}"""))
+        val raw = """{"error":{"code":"controller-busy","message":"Controller busy"}}"""
+        assertEquals("Controller busy", parser.errorMessage(raw))
+        assertEquals("controller-busy", parser.errorCode(raw))
     }
 
     @Test

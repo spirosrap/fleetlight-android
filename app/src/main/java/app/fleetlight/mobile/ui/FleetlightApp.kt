@@ -571,7 +571,12 @@ private fun UpdatesScreen(
             item { JobProgressCard(job, state.jobError, onDismissJob) }
         }
         if (state.activeJob == null && state.jobError != null) {
-            item { ControlMessageCard(state.jobError, error = true) }
+            item {
+                ControlMessageCard(
+                    state.jobError,
+                    error = !state.jobError.startsWith("Waiting for the current fleet operation"),
+                )
+            }
         }
         if (state.controlStatus == null) {
             item {

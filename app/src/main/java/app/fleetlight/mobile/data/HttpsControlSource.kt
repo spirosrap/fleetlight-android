@@ -47,7 +47,7 @@ class HttpsControlSource(
             val response = readBounded(if (status in 200..299) connection.inputStream else connection.errorStream)
             if (status !in 200..299) {
                 val detail = parser.errorMessage(response) ?: "HTTP $status"
-                throw ControlHttpException(status, detail)
+                throw ControlHttpException(status, detail, parser.errorCode(response))
             }
             response
         } finally {

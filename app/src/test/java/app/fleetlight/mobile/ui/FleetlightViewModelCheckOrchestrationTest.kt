@@ -238,6 +238,8 @@ class FleetlightViewModelCheckOrchestrationTest {
         assertTrue(ControlHttpException(429, "slow down").isRetryableControlFailure())
         assertTrue(ControlHttpException(503, "offline").isRetryableControlFailure())
         assertFalse(ControlHttpException(409, "busy").isRetryableControlFailure())
+        assertTrue(ControlHttpException(409, "busy", "controller-busy").isControllerBusyFailure())
+        assertFalse(ControlHttpException(409, "conflict", "request-id-conflict").isControllerBusyFailure())
     }
 
     @Test
@@ -256,6 +258,7 @@ class FleetlightViewModelCheckOrchestrationTest {
             ControlHttpException(408, "timeout"),
             ControlHttpException(429, "slow down"),
             ControlHttpException(503, "unavailable"),
+            ControlHttpException(409, "busy", "controller-busy"),
         ).forEach { error ->
             val retry = storedJobRetryAfterLookupFailure(stored, error)
             assertSame(stored, retry)

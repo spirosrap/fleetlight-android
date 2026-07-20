@@ -11,7 +11,11 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 
 class ControlProtocolException(message: String) : Exception(message)
-class ControlHttpException(val status: Int, message: String) : Exception(message)
+class ControlHttpException(
+    val status: Int,
+    message: String,
+    val errorCode: String? = null,
+) : Exception(message)
 
 class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) {
     fun pair(raw: String): ControlPairResult {
@@ -171,6 +175,11 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
     fun errorMessage(raw: String): String? = runCatching {
         val root = objectRoot(raw)
         (root.objectValue("error") ?: root).text("message", "detail")?.take(MAX_MESSAGE_LENGTH)
+    }.getOrNull()
+
+    fun errorCode(raw: String): String? = runCatching {
+        val root = objectRoot(raw)
+        (root.objectValue("error") ?: root).text("code")?.take(MAX_PHASE_LENGTH)
     }.getOrNull()
 
     private fun objectRoot(raw: String): JsonObject = try {

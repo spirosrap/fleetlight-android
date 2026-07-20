@@ -101,7 +101,7 @@ class ControlRepository(
         targetHostIds: List<String>,
         requestId: String = UUID.randomUUID().toString(),
     ): ControlJob {
-        require(runCatching { UUID.fromString(requestId) }.isSuccess) { "requestId must be a UUID" }
+        require(requestId.canonicalUuidOrNull() != null) { "requestId must be a UUID" }
         val targets = targetHostIds.map(String::trim).filter(String::isNotEmpty).distinct()
         require(targets.isNotEmpty()) { "At least one target is required" }
         require(!action.requiresExactlyOneTarget || targets.size == 1) {
@@ -124,7 +124,7 @@ class ControlRepository(
             ),
         )
         return parser.job(raw, action).also { job ->
-            if (job.action != action || job.requestId != requestId || job.targetHostIds != targets) {
+            if (job.action != action || !sameUuid(job.requestId, requestId) || job.targetHostIds != targets) {
                 throw ControlProtocolException("Controller returned a mismatched job")
             }
             validateTargetCount(job)
@@ -145,8 +145,8 @@ class ControlRepository(
             transport.request(ControlHttpRequest("GET", url, token = session.token)),
             fallbackAction,
         ).also { job ->
-            if (job.id != jobId || job.action != fallbackAction ||
-                (expectedRequestId != null && job.requestId != expectedRequestId) ||
+            if (!sameJobId(job.id, jobId) || job.action != fallbackAction ||
+                (expectedRequestId != null && !sameUuid(job.requestId, expectedRequestId)) ||
                 (expectedTargetHostIds.isNotEmpty() && job.targetHostIds != expectedTargetHostIds)
             ) {
                 throw ControlProtocolException("Controller returned a mismatched job")
@@ -161,14 +161,14 @@ class ControlRepository(
         fallbackAction: ControlAction,
         expectedTargetHostIds: List<String> = emptyList(),
     ): ControlJob {
-        require(runCatching { UUID.fromString(requestId) }.isSuccess) { "Invalid request id" }
+        require(requestId.canonicalUuidOrNull() != null) { "Invalid request id" }
         val session = session(endpoint)
         val url = requireNotNull(ControlEndpointPolicy.route(endpoint, "jobs/by-request/$requestId"))
         return parser.job(
             transport.request(ControlHttpRequest("GET", url, token = session.token)),
             fallbackAction,
         ).also { job ->
-            if (job.requestId != requestId || job.action != fallbackAction ||
+            if (!sameUuid(job.requestId, requestId) || job.action != fallbackAction ||
                 (expectedTargetHostIds.isNotEmpty() && job.targetHostIds != expectedTargetHostIds)
             ) {
                 throw ControlProtocolException("Controller returned a mismatched job")
@@ -193,6 +193,22 @@ class ControlRepository(
     private fun validateTargetCount(job: ControlJob) {
         if (job.action.requiresExactlyOneTarget && job.targetHostIds.size != 1) {
             throw ControlProtocolException("Controller returned an invalid multi-machine restart")
+        }
+    }
+
+    private fun sameUuid(actual: String?, expected: String): Boolean {
+        val actualValue = actual?.canonicalUuidOrNull()
+        val expectedValue = expected.canonicalUuidOrNull()
+        return actualValue != null && expectedValue != null && actualValue == expectedValue
+    }
+
+    private fun sameJobId(actual: String, expected: String): Boolean {
+        val actualValue = actual.canonicalUuidOrNull()
+        val expectedValue = expected.canonicalUuidOrNull()
+        return if (actualValue != null || expectedValue != null) {
+            actualValue != null && expectedValue != null && actualValue == expectedValue
+        } else {
+            actual == expected
         }
     }
 

@@ -58,6 +58,41 @@ class ControlRepositoryTest {
     }
 
     @Test
+    fun acceptsEquivalentUuidCaseForCreatedAndRecoveredJobs() = runTest {
+        val lowerRequest = "abcdefab-cdef-4abc-8def-abcdefabcdef"
+        val lowerJob = "12345678-9abc-4def-8123-456789abcdef"
+        val response = jobJson(
+            requestId = lowerRequest.uppercase(),
+            action = "codex-mac-app",
+            targets = listOf("host-a"),
+            id = lowerJob.uppercase(),
+        )
+        val transport = QueueTransport(mutableListOf(response, response, response))
+        val repository = ControlRepository(transport, pairedCredentials())
+
+        repository.createJob(endpoint, ControlAction.CODEX_MAC_APP, listOf("host-a"), lowerRequest)
+        repository.job(
+            endpoint,
+            lowerJob,
+            ControlAction.CODEX_MAC_APP,
+            lowerRequest,
+            listOf("host-a"),
+        )
+        repository.jobByRequest(
+            endpoint,
+            lowerRequest,
+            ControlAction.CODEX_MAC_APP,
+            listOf("host-a"),
+        )
+
+        assertEquals("https://observer.example/fleetlight/control/v1/jobs/$lowerJob", transport.requests[1].url)
+        assertEquals(
+            "https://observer.example/fleetlight/control/v1/jobs/by-request/$lowerRequest",
+            transport.requests[2].url,
+        )
+    }
+
+    @Test
     fun refusesTokenOnDifferentControlBase() = runTest {
         val credentials = pairedCredentials()
         val repository = ControlRepository(QueueTransport(mutableListOf()), credentials)
@@ -196,8 +231,13 @@ class ControlRepositoryTest {
     private fun statusJson(controllerId: String): String =
         """{"controllerId":"$controllerId","commandAuthorityEnabled":true,"jobJournalAvailable":true,"busy":false,"capabilities":[{"hostId":"host-a","actions":["codex-cli"],"codexCliUpdateAvailable":true}]}"""
 
-    private fun jobJson(requestId: String, action: String, targets: List<String>): String =
-        """{"id":"job-a","requestId":"$requestId","action":"$action","targetHostIds":[${targets.joinToString { "\"$it\"" }}],"state":"queued","completed":0,"total":${targets.size},"progress":[]}"""
+    private fun jobJson(
+        requestId: String,
+        action: String,
+        targets: List<String>,
+        id: String = "job-a",
+    ): String =
+        """{"id":"$id","requestId":"$requestId","action":"$action","targetHostIds":[${targets.joinToString { "\"$it\"" }}],"state":"queued","completed":0,"total":${targets.size},"progress":[]}"""
 
     private fun checkJson(requestId: String, state: String, id: String = checkId): String =
         """{"id":"$id","requestId":"$requestId","state":"$state","phase":"versions","detail":"Checking versions"}"""

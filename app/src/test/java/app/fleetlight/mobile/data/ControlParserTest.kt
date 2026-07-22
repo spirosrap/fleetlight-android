@@ -26,7 +26,7 @@ class ControlParserTest {
               "activeJobId":"job-a",
               "capabilities":[{
                 "hostId":"host-a","hostName":"Workstation","state":"online",
-                "actions":["codex-cli","codex-mac-app","restart-linux"],
+                "actions":["codex-cli","codex-mac-app","restart-linux","refresh-hosts"],
                 "codexCliUpdateAvailable":true,
                 "codexMacAppUpdateAvailable":false,
                 "linuxUpdateAvailable":false,
@@ -38,7 +38,15 @@ class ControlParserTest {
         assertTrue(status.commandAuthorityEnabled)
         assertTrue(status.jobJournalAvailable)
         assertTrue(status.busy)
-        assertEquals(setOf(ControlAction.CODEX_CLI, ControlAction.CODEX_MAC_APP, ControlAction.RESTART_LINUX), status.actions)
+        assertEquals(
+            setOf(
+                ControlAction.CODEX_CLI,
+                ControlAction.CODEX_MAC_APP,
+                ControlAction.RESTART_LINUX,
+                ControlAction.REFRESH_HOSTS,
+            ),
+            status.actions,
+        )
         assertTrue(status.capabilities.single().codexCliUpdateAvailable)
         assertTrue(status.capabilities.single().restartRequired)
 
@@ -93,6 +101,25 @@ class ControlParserTest {
     }
 
     @Test
+    fun parsesReadOnlyRecheckActionAndFreshOfflineResultAsCompleted() {
+        val job = parser.job(
+            """{
+              "id":"job-a","action":"refresh-hosts","targetHostIds":["host-a","host-b"],"state":"running",
+              "progress":[
+                {"hostId":"host-a","phase":"refreshing","detail":"Probing"},
+                {"hostId":"host-b","phase":"succeeded","detail":"Fresh result · Offline"}
+              ]
+            }""",
+            ControlAction.REFRESH_HOSTS,
+        )
+
+        assertEquals(ControlAction.REFRESH_HOSTS, job.action)
+        assertEquals(ControlTargetState.RUNNING, job.targets[0].state)
+        assertEquals(ControlTargetState.SUCCEEDED, job.targets[1].state)
+        assertEquals("Fresh result · Offline", job.targets[1].message)
+    }
+
+    @Test
     fun rejectsAvailableOperationsWithoutMatchingSupportAction() {
         listOf(
             "\"codexCliUpdateAvailable\":true" to "Codex CLI",
@@ -124,6 +151,32 @@ class ControlParserTest {
         )
 
         assertEquals("Studio Linux", status.recentJobs.single().targets.single().hostName)
+    }
+
+    @Test
+    fun parsesReceiptTimestampFromMostUsefulAvailableJobTime() {
+        val finished = parser.job(
+            """{"id":"finished","action":"codex-cli","state":"succeeded","createdAt":"2026-07-17T09:00:00Z","startedAt":"2026-07-17T09:01:00Z","updatedAt":"2026-07-17T09:02:00Z","finishedAt":"2026-07-17T09:03:00Z"}""",
+            ControlAction.CODEX_CLI,
+        )
+        val updated = parser.job(
+            """{"id":"updated","action":"codex-cli","state":"succeeded","createdAt":"2026-07-17T09:00:00Z","startedAt":"2026-07-17T09:01:00Z","updatedAt":"2026-07-17T09:02:00Z"}""",
+            ControlAction.CODEX_CLI,
+        )
+        val started = parser.job(
+            """{"id":"started","action":"codex-cli","state":"succeeded","createdAt":"2026-07-17T09:00:00Z","startedAt":"2026-07-17T09:01:00Z"}""",
+            ControlAction.CODEX_CLI,
+        )
+        val created = parser.job(
+            """{"id":"created","action":"codex-cli","state":"succeeded","createdAt":"2026-07-17T09:00:00Z"}""",
+            ControlAction.CODEX_CLI,
+        )
+
+        assertEquals(Instant.parse("2026-07-17T09:03:00Z"), finished.updatedAt)
+        assertEquals(Instant.parse("2026-07-17T09:02:00Z"), updated.updatedAt)
+        assertEquals(Instant.parse("2026-07-17T09:01:00Z"), started.updatedAt)
+        assertEquals(Instant.parse("2026-07-17T09:00:00Z"), created.updatedAt)
+        assertEquals(created.createdAt, created.receiptTimestamp)
     }
 
     @Test

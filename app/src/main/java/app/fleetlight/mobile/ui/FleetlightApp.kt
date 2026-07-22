@@ -32,6 +32,7 @@ import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Speed
@@ -98,6 +99,8 @@ import app.fleetlight.mobile.data.PendingControlAction
 import app.fleetlight.mobile.data.confirmationCopy
 import app.fleetlight.mobile.data.commandReachable
 import app.fleetlight.mobile.data.eligibleFor
+import app.fleetlight.mobile.data.receiptCounts
+import app.fleetlight.mobile.data.receiptTimestamp
 import app.fleetlight.mobile.data.safeHostName
 import app.fleetlight.mobile.data.updateAvailable
 import app.fleetlight.mobile.ui.theme.FleetlightTheme
@@ -121,6 +124,7 @@ fun FleetlightApp(viewModel: FleetlightViewModel) {
     FleetlightContent(
         state = state,
         onRefresh = viewModel::refreshNow,
+        onRecheckHosts = viewModel::recheckHosts,
         onCheckForUpdates = viewModel::checkForUpdates,
         onSaveEndpoints = viewModel::saveEndpoints,
         onConfirmPendingEndpoints = viewModel::confirmPendingEndpoints,
@@ -141,6 +145,7 @@ fun FleetlightApp(viewModel: FleetlightViewModel) {
 fun FleetlightContent(
     state: FleetUiState,
     onRefresh: () -> Unit,
+    onRecheckHosts: (List<String>) -> Unit,
     onCheckForUpdates: () -> Unit,
     onSaveEndpoints: (List<String>) -> Unit,
     onConfirmPendingEndpoints: () -> Unit,
@@ -173,12 +178,14 @@ fun FleetlightContent(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onRefresh, enabled = !state.refreshing) {
+                    TextButton(onClick = onRefresh, enabled = !state.refreshing) {
                         if (state.refreshing) {
-                            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         } else {
-                            Icon(Icons.Outlined.Refresh, contentDescription = "Refresh fleet snapshot")
+                            Icon(Icons.Outlined.Refresh, contentDescription = "Reload status snapshot", modifier = Modifier.size(18.dp))
                         }
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (state.refreshing) "Reloading" else "Reload")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -209,7 +216,11 @@ fun FleetlightContent(
         ) {
             state.banner?.let { ConnectionBanner(state.connection, it) }
             when (selectedTab) {
-                AppTab.FLEET -> FleetScreen(state.feed, onHostClick = { selectedHost = it })
+                AppTab.FLEET -> FleetScreen(
+                    state = state,
+                    onHostClick = { selectedHost = it },
+                    onRecheckHosts = onRecheckHosts,
+                )
                 AppTab.UPDATES -> UpdatesScreen(state, onCheckForUpdates, onRequestUpdate, onDismissJob)
                 AppTab.EVENTS -> EventsScreen(state.feed)
                 AppTab.SETTINGS -> SettingsScreen(state, onSaveEndpoints, onStagePairing, onRevokeControl)
@@ -219,9 +230,13 @@ fun FleetlightContent(
 
     selectedHost?.let { host ->
         ModalBottomSheet(onDismissRequest = { selectedHost = null }) {
+            val capability = state.controlStatus?.capabilities?.firstOrNull { it.hostId == host.id }
             HostDetail(
-                host,
-                Modifier
+                host = host,
+                supportsRecheck = capability?.actions?.contains(ControlAction.REFRESH_HOSTS) == true,
+                recheckEnabled = state.controlJobReady && capability?.eligibleFor(ControlAction.REFRESH_HOSTS) == true,
+                onRecheck = { onRecheckHosts(listOf(host.id)) },
+                modifier = Modifier
                     .padding(horizontal = 24.dp, vertical = 8.dp)
                     .verticalScroll(rememberScrollState()),
             )
@@ -351,7 +366,12 @@ private fun ConnectionBanner(connection: FeedConnection, text: String) {
 }
 
 @Composable
-private fun FleetScreen(feed: MobileFeed?, onHostClick: (FleetHost) -> Unit) {
+private fun FleetScreen(
+    state: FleetUiState,
+    onHostClick: (FleetHost) -> Unit,
+    onRecheckHosts: (List<String>) -> Unit,
+) {
+    val feed = state.feed
     if (feed == null) {
         EmptyState(
             icon = Icons.Outlined.Shield,
@@ -360,27 +380,63 @@ private fun FleetScreen(feed: MobileFeed?, onHostClick: (FleetHost) -> Unit) {
         )
         return
     }
-    val sortedHosts = remember(feed.hosts) {
-        feed.hosts.sortedWith(compareBy<FleetHost>({ hostPriority(it) }, { it.name.lowercase() }))
-    }
+    val sortedHosts = remember(feed.hosts) { prioritizedFleetHosts(feed.hosts) }
+    val capabilities = state.controlStatus?.capabilities.orEmpty()
+    val recheckTargets = capabilities.filter { ControlAction.REFRESH_HOSTS in it.actions }
+    val recheckCapabilities = capabilities.associateBy { it.hostId }
+    val recheckRunning = state.activeJob?.let {
+        it.action == ControlAction.REFRESH_HOSTS && !it.state.isTerminal
+    } == true
     LazyColumn(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item { SummarySection(feed.summary, feed.generatedAt) }
+        item {
+            SummarySection(
+                summary = feed.summary,
+                generatedAt = feed.generatedAt,
+                recheckAvailable = recheckTargets.isNotEmpty(),
+                recheckEnabled = state.controlJobReady && recheckTargets.isNotEmpty(),
+                recheckRunning = recheckRunning,
+                onRecheckFleet = { onRecheckHosts(recheckTargets.map { it.hostId }) },
+            )
+        }
+        state.controlError?.let { message ->
+            item { ControlMessageCard(message, error = true) }
+        }
         item {
             SectionHeading(
                 title = "Machines",
-                subtitle = if (feed.summary.issueCount == 0) "All clear" else "Issues first",
+                subtitle = when {
+                    sortedHosts.any(FleetHost::isPinned) -> "Pinned first · then issues"
+                    feed.summary.issueCount == 0 -> "All clear"
+                    else -> "Issues first"
+                },
             )
         }
-        items(sortedHosts, key = FleetHost::id) { host -> HostCard(host, onHostClick) }
+        items(sortedHosts, key = FleetHost::id) { host ->
+            val capability = recheckCapabilities[host.id]
+            HostCard(
+                host = host,
+                onClick = onHostClick,
+                supportsRecheck = capability?.actions?.contains(ControlAction.REFRESH_HOSTS) == true,
+                recheckEnabled = state.controlJobReady && capability?.eligibleFor(ControlAction.REFRESH_HOSTS) == true,
+                onRecheck = { onRecheckHosts(listOf(host.id)) },
+            )
+        }
         item { Spacer(Modifier.height(8.dp)) }
     }
 }
 
 @Composable
-private fun SummarySection(summary: FleetSummary, generatedAt: Instant) {
+private fun SummarySection(
+    summary: FleetSummary,
+    generatedAt: Instant,
+    recheckAvailable: Boolean,
+    recheckEnabled: Boolean,
+    recheckRunning: Boolean,
+    onRecheckFleet: () -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -410,6 +466,31 @@ private fun SummarySection(summary: FleetSummary, generatedAt: Instant) {
             if (summary.updatesAvailable > 0) SummaryChip("Updates", summary.updatesAvailable, MaterialTheme.colorScheme.primaryContainer)
             if (summary.restartRequired > 0) SummaryChip("Restart", summary.restartRequired, MaterialTheme.colorScheme.tertiaryContainer)
         }
+        if (recheckAvailable) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Run fresh read-only probes on every machine",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(12.dp))
+                FilledTonalButton(onClick = onRecheckFleet, enabled = recheckEnabled) {
+                    if (recheckRunning) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(6.dp))
+                    } else {
+                        Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(if (recheckRunning) "Rechecking…" else "Recheck fleet")
+                }
+            }
+        }
     }
 }
 
@@ -426,7 +507,13 @@ private fun SummaryChip(label: String, count: Int, color: Color) {
 }
 
 @Composable
-private fun HostCard(host: FleetHost, onClick: (FleetHost) -> Unit) {
+private fun HostCard(
+    host: FleetHost,
+    onClick: (FleetHost) -> Unit,
+    supportsRecheck: Boolean,
+    recheckEnabled: Boolean,
+    onRecheck: () -> Unit,
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -443,6 +530,15 @@ private fun HostCard(host: FleetHost, onClick: (FleetHost) -> Unit) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(host.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    if (host.isPinned) {
+                        Spacer(Modifier.width(6.dp))
+                        Icon(
+                            Icons.Outlined.PushPin,
+                            contentDescription = "Pinned machine",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                     Spacer(Modifier.width(8.dp))
                     Text(
                         host.status.replaceFirstChar(Char::uppercase),
@@ -470,24 +566,60 @@ private fun HostCard(host: FleetHost, onClick: (FleetHost) -> Unit) {
                     )
                 }
             }
+            if (supportsRecheck) {
+                TextButton(onClick = onRecheck, enabled = recheckEnabled) { Text("Recheck") }
+            }
             Icon(Icons.Outlined.ChevronRight, contentDescription = "Details", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 @Composable
-private fun HostDetail(host: FleetHost, modifier: Modifier = Modifier) {
+private fun HostDetail(
+    host: FleetHost,
+    supportsRecheck: Boolean,
+    recheckEnabled: Boolean,
+    onRecheck: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             StatusOrb(healthy = host.state == HostState.ONLINE, Modifier.size(48.dp), host.state)
             Spacer(Modifier.width(14.dp))
-            Column {
-                Text(host.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(host.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    if (host.isPinned) {
+                        Spacer(Modifier.width(8.dp))
+                        Icon(
+                            Icons.Outlined.PushPin,
+                            contentDescription = "Pinned machine",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
                 Text(
                     "${host.platform} · ${host.status.replaceFirstChar(Char::uppercase)}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+        if (supportsRecheck) {
+            FilledTonalButton(
+                onClick = onRecheck,
+                enabled = recheckEnabled,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Recheck ${host.name}")
+            }
+            Text(
+                "Read-only: refreshes this machine's status without installing updates or restarting it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         host.detail?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
         HorizontalDivider()
@@ -553,15 +685,11 @@ private fun UpdatesScreen(
         EmptyState(Icons.Outlined.SystemUpdateAlt, "No update data", "Connect a feed to view fleet update status.")
         return
     }
-    val ready = state.connection == FeedConnection.LIVE &&
-        state.controlStatus?.commandAuthorityEnabled == true &&
-        state.controlStatus.jobJournalAvailable &&
-        state.controlStatus.busy.not() &&
-        state.controlStatus.checkingUpdates.not() &&
-        !state.updateCheckSubmitting &&
-        !state.checkSyncPending &&
-        state.activeCheck?.state?.isTerminal != false &&
-        state.activeJob?.state?.isTerminal != false
+    val ready = state.controlJobReady
+    val recentReceipts = recentOperationReceipts(
+        jobs = state.controlStatus?.recentJobs.orEmpty(),
+        activeJobId = state.activeJob?.id ?: state.controlStatus?.activeJobId,
+    )
     LazyColumn(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -569,6 +697,9 @@ private fun UpdatesScreen(
         item { UpdateCheckCard(state, onCheckForUpdates) }
         state.activeJob?.let { job ->
             item { JobProgressCard(job, state.jobError, onDismissJob) }
+        }
+        if (recentReceipts.isNotEmpty()) {
+            item { RecentOperationsSection(recentReceipts) }
         }
         if (state.activeJob == null && state.jobError != null) {
             item {
@@ -829,6 +960,21 @@ private val LINUX_VERIFIED_STATES = setOf("current", "updateavailable", "updates
 internal val FleetUiState.updatesFeed: MobileFeed?
     get() = controllerFeed ?: feed
 
+internal val FleetUiState.controlJobReady: Boolean
+    get() {
+        val status = controlStatus ?: return false
+        return connection == FeedConnection.LIVE &&
+            controlEndpoint != null &&
+            status.commandAuthorityEnabled &&
+            status.jobJournalAvailable &&
+            !status.busy &&
+            !status.checkingUpdates &&
+            !updateCheckSubmitting &&
+            !checkSyncPending &&
+            activeCheck?.state?.isTerminal != false &&
+            activeJob?.state?.isTerminal != false
+    }
+
 internal fun releaseVersionLabel(version: String?, build: String? = null, failed: Boolean): String? {
     val prefix = if (failed) "Last known" else "Latest"
     return when {
@@ -1003,6 +1149,110 @@ private fun JobProgressCard(job: ControlJob, error: String?, onDismiss: () -> Un
         }
     }
 }
+
+@Composable
+private fun RecentOperationsSection(jobs: List<ControlJob>) {
+    var expandedJobId by rememberSaveable { mutableStateOf<String?>(null) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionHeading(
+            title = "Recent operations",
+            subtitle = "Read-only receipts from the paired controller",
+        )
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+            Column {
+                jobs.forEachIndexed { index, job ->
+                    val expanded = expandedJobId == job.id
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                if (job.state == ControlJobState.SUCCEEDED) Icons.Outlined.CheckCircle else Icons.Outlined.WarningAmber,
+                                contentDescription = null,
+                                tint = if (job.state == ControlJobState.SUCCEEDED) {
+                                    MaterialTheme.colorScheme.secondary
+                                } else {
+                                    MaterialTheme.colorScheme.tertiary
+                                },
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "${job.action.title} · ${job.state.displayLabel}",
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    listOfNotNull(
+                                        operationReceiptSummary(job),
+                                        job.receiptTimestamp?.let { relativeTime(it) },
+                                    ).joinToString(" · "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(
+                                onClick = { expandedJobId = if (expanded) null else job.id },
+                            ) {
+                                Text(if (expanded) "Hide" else "Details")
+                            }
+                        }
+                        if (expanded) {
+                            job.message?.takeIf(String::isNotBlank)?.let {
+                                Text(it, style = MaterialTheme.typography.bodySmall)
+                            }
+                            if (job.targets.isEmpty()) {
+                                Text(
+                                    "Per-machine details were not reported",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else {
+                                job.targets.forEach { target ->
+                                    Text(
+                                        "${target.hostName}: ${target.displayProgress}${target.message?.let { " · $it" }.orEmpty()}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (index < jobs.lastIndex) HorizontalDivider()
+                }
+            }
+        }
+    }
+}
+
+internal fun recentOperationReceipts(
+    jobs: List<ControlJob>,
+    activeJobId: String?,
+): List<ControlJob> = jobs.asSequence()
+    .filter { it.state.isTerminal && it.id != activeJobId }
+    .sortedWith(
+        compareByDescending<ControlJob> { it.receiptTimestamp ?: Instant.MIN }
+            .thenByDescending(ControlJob::id),
+    )
+    .distinctBy(ControlJob::id)
+    .take(MAX_RECENT_OPERATION_RECEIPTS)
+    .toList()
+
+internal fun operationReceiptSummary(job: ControlJob): String {
+    val counts = job.receiptCounts()
+    return buildList {
+        if (counts.succeeded > 0) add("${counts.succeeded} succeeded")
+        if (counts.failed > 0) add("${counts.failed} failed")
+        if (counts.offline > 0) add("${counts.offline} offline")
+        if (counts.skipped > 0) add("${counts.skipped} skipped")
+        if (counts.cancelled > 0) add("${counts.cancelled} cancelled")
+        if (counts.pending > 0) add("${counts.pending} pending")
+    }.joinToString(" · ").ifBlank { "No machine results reported" }
+}
+
+private val ControlJobState.displayLabel: String
+    get() = name.lowercase().replaceFirstChar(Char::uppercase)
+
+private const val MAX_RECENT_OPERATION_RECEIPTS = 5
 
 @Composable
 private fun ControlMessageCard(text: String, error: Boolean = false) {
@@ -1302,6 +1552,14 @@ private fun hostPriority(host: FleetHost): Int = when (host.state) {
     HostState.ONLINE -> if (host.issueTypes.isEmpty()) 6 else 5
 }
 
+internal fun prioritizedFleetHosts(hosts: List<FleetHost>): List<FleetHost> = hosts.sortedWith(
+    compareBy<FleetHost>(
+        { if (it.isPinned) 0 else 1 },
+        ::hostPriority,
+        { it.name.lowercase() },
+    ),
+)
+
 private fun observerSubtitle(state: FleetUiState): String {
     val observer = state.feed?.observer?.name ?: "Secure fleet companion"
     val sourceVersion = state.feed?.observer?.appVersion?.let { "Observer $it" }
@@ -1371,6 +1629,7 @@ private fun MobileFeed.installedVersion(hostId: String, action: ControlAction): 
     }
     ControlAction.LINUX_OS, ControlAction.RESTART_LINUX ->
         hosts.firstOrNull { it.id == hostId }?.operatingSystem?.let { "Installed $it" }
+    ControlAction.REFRESH_HOSTS -> null
 }
 
 private val app.fleetlight.mobile.data.ControlJobTarget.displayProgress: String
@@ -1390,6 +1649,7 @@ private fun FleetPreview() {
         FleetlightContent(
             state = FleetUiState(feed = DemoFeed.value, connection = FeedConnection.LIVE),
             onRefresh = {},
+            onRecheckHosts = { _ -> },
             onCheckForUpdates = {},
             onSaveEndpoints = {},
             onConfirmPendingEndpoints = {},

@@ -118,6 +118,26 @@ class ControlRepositoryTest {
     }
 
     @Test
+    fun recheckUsesReadOnlyActionAndAllowsMultipleTargets() = runTest {
+        val transport = QueueTransport(
+            mutableListOf(jobJson(requestId, "refresh-hosts", listOf("host-offline", "host-online"))),
+        )
+        val repository = ControlRepository(transport, pairedCredentials())
+
+        repository.createJob(
+            endpoint,
+            ControlAction.REFRESH_HOSTS,
+            listOf("host-offline", "host-online"),
+            requestId,
+        )
+
+        val request = transport.requests.single()
+        assertTrue(request.body.orEmpty().contains("\"action\":\"refresh-hosts\""))
+        assertTrue(request.body.orEmpty().contains("\"targetHostIds\":[\"host-offline\",\"host-online\"]"))
+        assertEquals(requestId, request.idempotencyKey)
+    }
+
+    @Test
     fun refusesRestartWithMoreThanOneTargetBeforeNetwork() = runTest {
         val transport = QueueTransport(mutableListOf())
         val repository = ControlRepository(transport, pairedCredentials())

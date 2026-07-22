@@ -4,12 +4,14 @@ import app.fleetlight.mobile.data.ControlCheckOrchestrator
 import app.fleetlight.mobile.data.ControlCheckState
 import app.fleetlight.mobile.data.ControlCheck
 import app.fleetlight.mobile.data.ControlAction
+import app.fleetlight.mobile.data.ControlCapability
 import app.fleetlight.mobile.data.ControlHttpException
 import app.fleetlight.mobile.data.ControlProtocolException
 import app.fleetlight.mobile.data.ControlCredentialStore
 import app.fleetlight.mobile.data.ControlHttpRequest
 import app.fleetlight.mobile.data.ControlRepository
 import app.fleetlight.mobile.data.ControlSession
+import app.fleetlight.mobile.data.ControlStatus
 import app.fleetlight.mobile.data.ControlTransport
 import app.fleetlight.mobile.data.StoredControlCheck
 import app.fleetlight.mobile.data.StoredControlJob
@@ -27,6 +29,49 @@ class FleetlightViewModelCheckOrchestrationTest {
     private val endpoint = "https://observer.example/fleetlight/mobile-feed.json"
     private val requestId = "00000000-0000-0000-0000-000000000001"
     private val checkId = "10000000-0000-0000-0000-000000000001"
+
+    @Test
+    fun readOnlyRecheckSelectsOfflineTargetsAndUsesNormalJobReadinessGates() {
+        val status = ControlStatus(
+            observerId = "controller-a",
+            commandAuthorityEnabled = true,
+            jobJournalAvailable = true,
+            capabilities = listOf(
+                ControlCapability(
+                    hostId = "offline-host",
+                    hostName = "Offline host",
+                    state = "offline",
+                    actions = setOf(ControlAction.REFRESH_HOSTS),
+                ),
+                ControlCapability(
+                    hostId = "unsupported-host",
+                    hostName = "Unsupported host",
+                    state = "online",
+                    actions = emptySet(),
+                ),
+            ),
+        )
+        val ready = FleetUiState(
+            connection = FeedConnection.LIVE,
+            controlEndpoint = endpoint,
+            controlStatus = status,
+        )
+
+        val targets = eligibleControlTargets(
+            status,
+            ControlAction.REFRESH_HOSTS,
+            listOf("offline-host", "offline-host", "unsupported-host"),
+        )
+
+        assertEquals(listOf("offline-host"), targets.map(ControlCapability::hostId))
+        assertNull(controlJobBlockReason(ready, hasStoredJob = false))
+        assertTrue(ready.controlJobReady)
+        assertEquals(
+            "Another fleet operation is already active",
+            controlJobBlockReason(ready.copy(controlStatus = status.copy(busy = true)), hasStoredJob = false),
+        )
+        assertFalse(ready.copy(controlStatus = status.copy(busy = true)).controlJobReady)
+    }
 
     @Test
     fun pairingWaitsForActiveOrStoredControlWorkIncludingTerminalPostSync() {

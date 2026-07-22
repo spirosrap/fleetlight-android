@@ -63,6 +63,25 @@ class ControlActionPolicyTest {
     }
 
     @Test
+    fun readOnlyRecheckSupportsOfflineMachinesAndNeverUsesUpdateConfirmation() {
+        val offline = capability(actions = setOf(ControlAction.REFRESH_HOSTS)).copy(state = "offline")
+        val unsupported = offline.copy(actions = emptySet())
+
+        assertTrue(offline.eligibleFor(ControlAction.REFRESH_HOSTS))
+        assertFalse(unsupported.eligibleFor(ControlAction.REFRESH_HOSTS))
+        assertTrue(ControlAction.REFRESH_HOSTS.isReadOnly)
+        assertFalse(ControlAction.REFRESH_HOSTS.isUpdate)
+        assertFalse(ControlAction.REFRESH_HOSTS.requiresExactlyOneTarget)
+        assertThrows(IllegalStateException::class.java) {
+            PendingControlAction(
+                action = ControlAction.REFRESH_HOSTS,
+                targetHostIds = listOf("host-a"),
+                targetHostNames = listOf("Studio Linux"),
+            ).confirmationCopy()
+        }
+    }
+
+    @Test
     fun progressNamesNeverExposeInternalHostIds() {
         val raw = ControlJob(
             id = "job-a",

@@ -25,6 +25,7 @@ class FeedParserTest {
         assertEquals(1, feed.summary.alerts)
         assertEquals(1, feed.summary.restartRequired)
         val workstation = feed.hosts.first()
+        assertTrue(workstation.isPinned)
         assertEquals(44.0, workstation.diskPercent ?: -1.0, 0.0)
         assertEquals("1.0", workstation.codexMacAppVersion)
         assertEquals("running", workstation.services.single().state)
@@ -46,6 +47,7 @@ class FeedParserTest {
         assertEquals(1, feed.hosts.size)
         assertEquals(HostState.UNKNOWN, feed.hosts.single().state)
         assertFalse(feed.linuxUpdates.any())
+        assertFalse(feed.hosts.single().isPinned)
     }
 
     @Test

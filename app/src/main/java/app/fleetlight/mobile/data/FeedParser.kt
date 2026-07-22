@@ -104,6 +104,7 @@ class FeedParser(
             warnings = value.warningArray("warnings", "alerts"),
             codexMacAppVersion = value.string("codexMacAppVersion", "codexAppVersion"),
             codexMacAppBuild = value.string("codexMacAppBuild", "codexAppBuild"),
+            isPinned = value.bool("isPinned", "pinned") ?: false,
         )
     }
 

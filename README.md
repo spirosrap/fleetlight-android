@@ -8,11 +8,14 @@ This repository is the sanitized public edition. It contains no fleet names, add
 
 - Native Kotlin and Jetpack Compose Material 3 interface with light, dark, and dynamic color
 - Issue-first Fleet view with separate Offline, Slow, Access, Alert, Update, and Restart signals
+- Pinned-machine priority with a visible pin marker while preserving issue ordering within each priority group
 - Per-machine details for latency, health, resources, services, warnings, software versions, and restart status
 - Always-visible per-machine installed versions and availability for Codex CLI, Codex Mac app, and Linux OS, with individual Install or Update controls
 - Authenticated **Check all** audit with determinate stage progress on compatible controllers, exact latest Codex versions, check freshness, Linux verification coverage, and resilient process-death recovery
 - Sequential Update all for eligible updates, plus Linux restart controls that intentionally operate on exactly one machine at a time
 - Exact confirmation before every update or restart, durable job progress, partial-result reporting, and idempotent recovery
+- Read-only fleet-wide and per-machine rechecks, including offline targets, without installing or restarting anything
+- Read-only recent operation receipts with timestamps and per-machine outcomes from the paired controller journal
 - Read-only status and Events remain available without command pairing
 - Up to four runtime-configured HTTPS endpoints; the freshest valid schema 1 response wins
 - Lightweight fleet-snapshot refresh every 60 seconds, manual snapshot refresh, serialized crash-safe atomic last-good caching, and clear stale/offline state
@@ -20,7 +23,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - `fleetlight://configure` endpoint links without compiling private addresses into the app
 - Optional stable release signing from an ignored properties file or environment variables
 
-- Version: **1.4.3 (8)**
+- Version: **1.5.0 (9)**
 - Application ID: `app.fleetlight.mobile`
 - Minimum Android: 8.0 / API 26
 - Compile and target SDK: 36
@@ -45,7 +48,9 @@ The app derives the same-origin control route while preserving the feed prefix: 
 
 Each update sends one fixed action (`codex-cli`, `codex-mac-app`, or `linux-os`) and an exact list of eligible machine IDs. “Update all” is one server-side sequential job. A Linux restart uses the separate `restart-linux` action and is accepted only for exactly one machine that currently reports restart required; there is deliberately no restart-all control. Before restarting, Fleetlight names the target and warns that active work and services will be interrupted while the controller waits for the machine to go offline and return. A UUID request is persisted before submission; if a response is lost, recovery uses the same idempotency key rather than creating a second job.
 
-The top refresh icon only reloads the lightweight fleet snapshot. **Updates → Check all** starts a separate authenticated, read-only controller audit that freshly probes installed versions, the Codex CLI registry, the official Codex Mac app feed, and configured Linux package sources. Compatible controllers report three bounded stages—Installed versions, Linux packages, and Publish results—so Android can show determinate completed/total progress and the current stage. Older controllers remain compatible and use indeterminate progress. Android polls the same idempotent request across disconnects or process restarts, safely retries transient timeouts and rate limits, and reloads the paired controller's exact feed before reporting completion. The audit never installs an update or restarts a machine.
+**Recheck fleet** and each machine's **Recheck** button use the separate read-only `refresh-hosts` action. Rechecks run through the same durable idempotent job journal, but they only request fresh probes; offline machines remain eligible and a fresh offline result is still a completed recheck. Because the action cannot install software or restart a machine, it starts directly without update or restart confirmation copy.
+
+The top **Reload** button only downloads the latest lightweight fleet snapshot; it does not probe machines. **Recheck fleet** requests fresh host probes. **Updates → Check all** starts a separate authenticated, read-only controller audit that freshly probes installed versions, the Codex CLI registry, the official Codex Mac app feed, and configured Linux package sources. Compatible controllers report three bounded stages—Installed versions, Linux packages, and Publish results—so Android can show determinate completed/total progress and the current stage. Older controllers remain compatible and use indeterminate progress. Android polls the same idempotent request across disconnects or process restarts, safely retries transient timeouts and rate limits, and reloads the paired controller's exact feed before reporting completion. Neither rechecks nor the audit install an update or restart a machine.
 
 ## Feed contract
 
@@ -64,7 +69,7 @@ The app accepts lower-camel-case JSON with these top-level fields:
 }
 ```
 
-`schemaVersion` and a valid ISO-8601 `generatedAt` are required. Feeds dated more than five minutes in the future are rejected so a misconfigured or untrusted observer cannot indefinitely outrank healthy sources. Incidents are immutable event-log entries rather than active/resolved records. Unknown fields are ignored and optional fields default safely. See [`fixtures/demo-feed.json`](fixtures/demo-feed.json) for a complete generic example.
+`schemaVersion` and a valid ISO-8601 `generatedAt` are required. Hosts may set `isPinned: true`; pinned hosts appear first and retain issue-first ordering within the pinned group. Feeds dated more than five minutes in the future are rejected so a misconfigured or untrusted observer cannot indefinitely outrank healthy sources. Incidents are immutable event-log entries rather than active/resolved records. Unknown fields are ignored and optional fields default safely. See [`fixtures/demo-feed.json`](fixtures/demo-feed.json) for a complete generic example.
 
 ## Build and test
 

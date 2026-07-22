@@ -78,6 +78,33 @@ data class FleetUiState(
     val checkSyncPending: Boolean = false,
 )
 
+internal fun controlJobBlockReason(state: FleetUiState, hasStoredJob: Boolean): String? {
+    val status = state.controlStatus
+    return when {
+        state.connection != FeedConnection.LIVE || state.controlEndpoint == null || status == null ||
+            !status.commandAuthorityEnabled || !status.jobJournalAvailable ->
+            "Connect to and pair a live observer before starting a fleet operation"
+        status.busy || state.activeJob?.state?.isTerminal == false || hasStoredJob ->
+            "Another fleet operation is already active"
+        status.checkingUpdates || state.updateCheckSubmitting || state.checkSyncPending ||
+            state.activeCheck?.state?.isTerminal == false ->
+            "Wait for the live update check to finish"
+        else -> null
+    }
+}
+
+internal fun eligibleControlTargets(
+    status: ControlStatus,
+    action: ControlAction,
+    hostIds: List<String>,
+) = hostIds.asSequence()
+    .map(String::trim)
+    .filter(String::isNotEmpty)
+    .distinct()
+    .mapNotNull { hostId -> status.capabilities.firstOrNull { it.hostId == hostId } }
+    .filter { it.eligibleFor(action) }
+    .toList()
+
 class FleetlightViewModel(
     application: Application,
     private val endpointStore: EndpointStore = EndpointStore(application),
@@ -295,30 +322,22 @@ class FleetlightViewModel(
     }
 
     fun requestUpdate(action: ControlAction, hostIds: List<String>) {
+        if (action.isReadOnly) {
+            recheckHosts(hostIds)
+            return
+        }
         val current = mutableState.value
-        val status = current.controlStatus
-        if (current.connection != FeedConnection.LIVE || status == null || !status.commandAuthorityEnabled || !status.jobJournalAvailable) {
-            mutableState.value = current.copy(controlError = "Connect to and pair a live observer before updating")
+        controlJobBlockReason(current, jobStore.read() != null)?.let { message ->
+            mutableState.value = current.copy(controlError = message)
             return
         }
-        if (status.busy || current.activeJob?.state?.isTerminal == false || jobStore.read() != null) {
-            mutableState.value = current.copy(controlError = "Another fleet operation is already active")
-            return
-        }
-        if (status.checkingUpdates || current.updateCheckSubmitting || current.checkSyncPending ||
-            current.activeCheck?.state?.isTerminal == false
-        ) {
-            mutableState.value = current.copy(controlError = "Wait for the live update check to finish")
-            return
-        }
+        val status = requireNotNull(current.controlStatus)
         val requested = hostIds.distinct()
         if (action.requiresExactlyOneTarget && requested.size != 1) {
             mutableState.value = current.copy(controlError = "Restart exactly one Linux machine at a time")
             return
         }
-        val eligible = status.capabilities.filter { capability ->
-            capability.hostId in requested && capability.eligibleFor(action)
-        }
+        val eligible = eligibleControlTargets(status, action, requested)
         if (eligible.isEmpty() || (action.requiresExactlyOneTarget && eligible.size != 1)) {
             val message = if (action == ControlAction.RESTART_LINUX) {
                 "That machine does not currently require a Linux restart"
@@ -338,12 +357,37 @@ class FleetlightViewModel(
         )
     }
 
+    fun recheckHosts(hostIds: List<String>) {
+        val current = mutableState.value
+        controlJobBlockReason(current, jobStore.read() != null)?.let { message ->
+            mutableState.value = current.copy(controlError = message)
+            return
+        }
+        val eligible = eligibleControlTargets(
+            status = requireNotNull(current.controlStatus),
+            action = ControlAction.REFRESH_HOSTS,
+            hostIds = hostIds,
+        )
+        if (eligible.isEmpty()) {
+            mutableState.value = current.copy(controlError = "No selected machine supports a live recheck")
+            return
+        }
+        startControlJob(ControlAction.REFRESH_HOSTS, eligible.map { it.hostId })
+    }
+
     fun dismissPendingUpdate() {
         mutableState.value = mutableState.value.copy(pendingControlAction = null)
     }
 
     fun confirmPendingUpdate() {
         val pending = mutableState.value.pendingControlAction ?: return
+        if (pending.action.isReadOnly) {
+            mutableState.value = mutableState.value.copy(
+                pendingControlAction = null,
+                jobError = "The read-only recheck was blocked from the update confirmation path",
+            )
+            return
+        }
         if (pending.action.requiresExactlyOneTarget && pending.targetHostIds.size != 1) {
             mutableState.value = mutableState.value.copy(
                 pendingControlAction = null,
@@ -351,24 +395,46 @@ class FleetlightViewModel(
             )
             return
         }
-        val endpoint = mutableState.value.controlEndpoint ?: return
-        val controlBase = ControlEndpointPolicy.baseForFeed(endpoint) ?: return
+        startControlJob(pending.action, pending.targetHostIds)
+    }
+
+    private fun startControlJob(action: ControlAction, targetHostIds: List<String>) {
+        val endpoint = mutableState.value.controlEndpoint
+        if (endpoint == null) {
+            mutableState.value = mutableState.value.copy(
+                pendingControlAction = null,
+                jobError = "The ${action.operationName} was not started because no controller is paired",
+            )
+            return
+        }
+        val controlBase = ControlEndpointPolicy.baseForFeed(endpoint)
+        if (controlBase == null) {
+            mutableState.value = mutableState.value.copy(
+                pendingControlAction = null,
+                jobError = "The ${action.operationName} was not started because the controller address is invalid",
+            )
+            return
+        }
         val stored = StoredControlJob(
             endpoint = endpoint,
             controlBase = controlBase,
             jobId = null,
             requestId = UUID.randomUUID().toString(),
-            action = pending.action,
-            targetHostIds = pending.targetHostIds,
+            action = action,
+            targetHostIds = targetHostIds,
         )
         if (!jobStore.write(stored)) {
             mutableState.value = mutableState.value.copy(
                 pendingControlAction = null,
-                jobError = "The update was not started because its recovery record could not be saved",
+                jobError = "The ${action.operationName} was not started because its recovery record could not be saved",
             )
             return
         }
-        mutableState.value = mutableState.value.copy(pendingControlAction = null, jobError = null)
+        mutableState.value = mutableState.value.copy(
+            pendingControlAction = null,
+            controlError = null,
+            jobError = null,
+        )
         submitOrRecover(stored)
     }
 
@@ -462,7 +528,7 @@ class FleetlightViewModel(
         val controllerBusy = error.isControllerBusyFailure()
         mutableState.value = mutableState.value.copy(
             jobError = if (controllerBusy) {
-                "Waiting for the current fleet operation to finish. This update will start automatically."
+                "Waiting for the current fleet operation to finish. This ${stored.action.operationName} will start automatically."
             } else if (recoveringProgress) {
                 "Progress is temporarily unavailable; Fleetlight will retry this same operation. ${safeMessage(error, "")}".trim()
             } else {
@@ -476,7 +542,7 @@ class FleetlightViewModel(
     private fun terminalSubmissionFailure(stored: StoredControlJob, error: Throwable) {
         jobStore.clear()
         mutableState.value = mutableState.value.copy(
-            jobError = safeMessage(error, "The update was not started"),
+            jobError = safeMessage(error, "The ${stored.action.operationName} was not started"),
             activeJob = null,
         )
         if (error is ControlHttpException && error.status == 409) checkControl(stored.endpoint)
@@ -500,7 +566,7 @@ class FleetlightViewModel(
             val refreshed = result.getOrNull()
             if (refreshed == null) {
                 val error = requireNotNull(result.exceptionOrNull())
-                mutableState.value = mutableState.value.copy(jobError = safeMessage(error, "Update progress is temporarily unavailable"))
+                mutableState.value = mutableState.value.copy(jobError = safeMessage(error, "Operation progress is temporarily unavailable"))
                 if (!retryableSubmissionFailure(error)) {
                     jobStore.clear()
                     mutableState.value = mutableState.value.copy(
@@ -794,6 +860,13 @@ private fun safeMessage(error: Throwable, fallback: String): String = error.mess
     ?.take(240)
     ?.takeIf(String::isNotBlank)
     ?: fallback
+
+private val ControlAction.operationName: String
+    get() = when (this) {
+        ControlAction.REFRESH_HOSTS -> "recheck"
+        ControlAction.RESTART_LINUX -> "restart"
+        else -> "update"
+    }
 
 private fun retryableSubmissionFailure(error: Throwable): Boolean =
     error.isRetryableControlFailure() || error.isControllerBusyFailure()

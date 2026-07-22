@@ -157,6 +157,7 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
             )
         }
         val targetIds = root.stringArray("targetHostIds")
+        val createdAt = root.instant("createdAt")
         return ControlJob(
             id = id,
             requestId = root.text("requestId"),
@@ -167,8 +168,11 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
             completed = root.integer("completed") ?: 0,
             total = root.integer("total") ?: targetIds.size,
             message = root.text("message")?.take(MAX_MESSAGE_LENGTH),
-            createdAt = root.instant("createdAt"),
-            updatedAt = root.instant("finishedAt", "startedAt"),
+            createdAt = createdAt,
+            updatedAt = root.instant("finishedAt")
+                ?: root.instant("updatedAt")
+                ?: root.instant("startedAt")
+                ?: createdAt,
         )
     }
 

@@ -187,7 +187,7 @@ class ControlRepository(
         val expectedBase = ControlEndpointPolicy.baseForFeed(endpoint)
             ?: throw ControlProtocolException("Control endpoint is invalid")
         return credentials.read(authority)?.takeIf { it.controlBase == expectedBase }
-            ?: throw ControlProtocolException("Pair this observer before starting updates")
+            ?: throw ControlProtocolException("Pair this observer before starting fleet operations")
     }
 
     private fun validateTargetCount(job: ControlJob) {

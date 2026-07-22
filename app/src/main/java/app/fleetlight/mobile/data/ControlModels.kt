@@ -7,10 +7,14 @@ enum class ControlAction(val wireValue: String, val title: String) {
     CODEX_CLI("codex-cli", "Codex CLI"),
     CODEX_MAC_APP("codex-mac-app", "Codex Mac app"),
     LINUX_OS("linux-os", "Linux OS"),
-    RESTART_LINUX("restart-linux", "Restart Linux");
+    RESTART_LINUX("restart-linux", "Restart Linux"),
+    REFRESH_HOSTS("refresh-hosts", "Recheck");
 
     val isUpdate: Boolean
-        get() = this != RESTART_LINUX
+        get() = this in setOf(CODEX_CLI, CODEX_MAC_APP, LINUX_OS)
+
+    val isReadOnly: Boolean
+        get() = this == REFRESH_HOSTS
 
     val requiresExactlyOneTarget: Boolean
         get() = this == RESTART_LINUX
@@ -69,7 +73,7 @@ enum class ControlTargetState {
             raw?.lowercase()?.replace("-", "")?.replace("_", "")
         ) {
             "queued", "pending", "notattempted", "waiting" -> QUEUED
-            "running", "updating", "installing", "downloading", "restarting" -> RUNNING
+            "running", "updating", "installing", "downloading", "restarting", "refreshing", "probing", "rechecking" -> RUNNING
             "issuing", "issuingrestart" -> ISSUING
             "waitingforoffline" -> WAITING_FOR_OFFLINE
             "waitingforonline" -> WAITING_FOR_ONLINE
@@ -202,13 +206,14 @@ fun ControlCapability.updateAvailable(action: ControlAction): Boolean = when (ac
     ControlAction.CODEX_CLI -> codexCliUpdateAvailable
     ControlAction.CODEX_MAC_APP -> codexMacAppUpdateAvailable
     ControlAction.LINUX_OS -> linuxUpdateAvailable
-    ControlAction.RESTART_LINUX -> false
+    ControlAction.RESTART_LINUX, ControlAction.REFRESH_HOSTS -> false
 }
 
 val ControlCapability.commandReachable: Boolean
     get() = state.trim().equals("online", ignoreCase = true)
 
 fun ControlCapability.eligibleFor(action: ControlAction): Boolean = when (action) {
+    ControlAction.REFRESH_HOSTS -> action in actions
     ControlAction.RESTART_LINUX -> commandReachable && action in actions && restartRequired
     else -> commandReachable && action in actions && updateAvailable(action)
 }
@@ -236,6 +241,37 @@ data class ControlJob(
 ) {
     val completedCount: Int
         get() = completed.coerceAtLeast(targets.count { it.state.isTerminal })
+}
+
+data class ControlJobReceiptCounts(
+    val succeeded: Int = 0,
+    val failed: Int = 0,
+    val offline: Int = 0,
+    val skipped: Int = 0,
+    val cancelled: Int = 0,
+    val pending: Int = 0,
+)
+
+val ControlJob.receiptTimestamp: Instant?
+    get() = updatedAt ?: createdAt
+
+fun ControlJob.receiptCounts(): ControlJobReceiptCounts {
+    val uniqueTargets = targets.distinctBy(ControlJobTarget::hostId)
+    val succeeded = uniqueTargets.count { it.state == ControlTargetState.SUCCEEDED }
+    val failed = uniqueTargets.count { it.state == ControlTargetState.FAILED }
+    val offline = uniqueTargets.count { it.state == ControlTargetState.OFFLINE }
+    val skipped = uniqueTargets.count { it.state == ControlTargetState.SKIPPED }
+    val cancelled = uniqueTargets.count { it.state == ControlTargetState.CANCELLED }
+    val resolved = succeeded + failed + offline + skipped + cancelled
+    val expected = maxOf(total, targetHostIds.distinct().size, uniqueTargets.size)
+    return ControlJobReceiptCounts(
+        succeeded = succeeded,
+        failed = failed,
+        offline = offline,
+        skipped = skipped,
+        cancelled = cancelled,
+        pending = (expected - resolved).coerceAtLeast(0),
+    )
 }
 
 fun ControlCapability.safeHostName(): String = hostName
@@ -268,6 +304,7 @@ data class ControlConfirmationCopy(
 )
 
 fun PendingControlAction.confirmationCopy(): ControlConfirmationCopy {
+    check(!action.isReadOnly) { "Read-only rechecks do not require confirmation" }
     if (action == ControlAction.RESTART_LINUX) {
         require(targetHostIds.size == 1 && targetHostNames.size == 1) {
             "A Linux restart must target exactly one machine"
@@ -289,6 +326,7 @@ fun PendingControlAction.confirmationCopy(): ControlConfirmationCopy {
         ControlAction.CODEX_MAC_APP -> "The Codex Mac app restarts automatically after updating."
         ControlAction.LINUX_OS -> "Packages will update sequentially. Machines will not reboot automatically."
         ControlAction.RESTART_LINUX -> error("Handled above")
+        ControlAction.REFRESH_HOSTS -> error("Handled above")
     }
     val count = targetHostNames.size
     return ControlConfirmationCopy(

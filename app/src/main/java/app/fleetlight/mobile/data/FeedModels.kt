@@ -82,6 +82,7 @@ data class FleetHost(
     val warnings: List<HostWarning> = emptyList(),
     val codexMacAppVersion: String? = null,
     val codexMacAppBuild: String? = null,
+    val isPinned: Boolean = false,
 )
 
 data class HostService(

@@ -10,7 +10,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - Issue-first Fleet view with separate Offline, Slow, Access, Alert, Update, and Restart signals
 - Pinned-machine priority with a visible pin marker while preserving issue ordering within each priority group
 - Per-machine details for latency, health, resources, services, warnings, software versions, and restart status
-- Native Trends tab with machine selection, true 1h/6h/24h windows, coverage and freshness indicators, and cadence-aware gap-safe charts
+- Native Trends tab with machine selection, true 1h/6h/24h windows, coverage and freshness indicators, cadence-aware gap-safe charts, and shared tap-or-drag inspection with exact timestamps and values
 - Always-visible per-machine installed versions and availability for Codex CLI, Codex Mac app, and Linux OS, with individual Install or Update controls
 - Authenticated **Check all** audit with determinate stage progress on compatible controllers, exact latest Codex versions, check freshness, Linux verification coverage, and resilient process-death recovery
 - Sequential Update all for eligible updates, plus Linux restart controls that intentionally operate on exactly one machine at a time
@@ -24,7 +24,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - `fleetlight://configure` endpoint links without compiling private addresses into the app
 - Optional stable release signing from an ignored properties file or environment variables
 
-- Version: **1.6.1 (11)**
+- Version: **1.7.0 (12)**
 - Application ID: `app.fleetlight.mobile`
 - Minimum Android: 8.0 / API 26
 - Compile and target SDK: 36

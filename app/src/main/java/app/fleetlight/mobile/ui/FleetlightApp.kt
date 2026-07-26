@@ -4,6 +4,8 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -81,6 +83,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -738,6 +741,29 @@ internal fun formatTrendDuration(seconds: Long): String = when {
     else -> "${seconds / 3_600}h ${((seconds % 3_600) / 60).toString().padStart(2, '0')}m"
 }
 
+internal fun nearestTrendMetric(samples: List<HostMetric>, target: Instant): HostMetric? {
+    if (samples.isEmpty()) return null
+    if (!target.isAfter(samples.first().capturedAt)) return samples.first()
+    if (!target.isBefore(samples.last().capturedAt)) return samples.last()
+
+    var lower = 0
+    var upper = samples.lastIndex
+    while (lower <= upper) {
+        val middle = (lower + upper) ushr 1
+        val timestamp = samples[middle].capturedAt
+        when {
+            timestamp == target -> return samples[middle]
+            timestamp.isBefore(target) -> lower = middle + 1
+            else -> upper = middle - 1
+        }
+    }
+    val earlier = samples[upper]
+    val later = samples[lower]
+    val earlierDistance = Duration.between(earlier.capturedAt, target).toMillis()
+    val laterDistance = Duration.between(target, later.capturedAt).toMillis()
+    return if (earlierDistance <= laterDistance) earlier else later
+}
+
 private data class TrendDefinition(
     val label: String,
     val color: Color,
@@ -766,9 +792,16 @@ private fun TrendsScreen(feed: MobileFeed?) {
 
     var selectedHostID by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedWindow by rememberSaveable { mutableStateOf(TrendWindow.SIX_HOURS) }
+    var selectedTimestampMillis by rememberSaveable { mutableStateOf<Long?>(null) }
     val selectedHost = hostsWithMetrics.firstOrNull { it.id == selectedHostID } ?: hostsWithMetrics.first()
     val samples = remember(feed.metrics, selectedHost.id, feed.generatedAt, selectedWindow) {
         trendMetrics(feed.metrics, selectedHost.id, feed.generatedAt, selectedWindow)
+    }
+    val selectedSample = remember(samples, selectedTimestampMillis) {
+        selectedTimestampMillis
+            ?.let(Instant::ofEpochMilli)
+            ?.let { nearestTrendMetric(samples, it) }
+            ?: samples.lastOrNull()
     }
     val coverage = feed.metricsWindowHours?.let { "Source history: ${it}h" } ?: "Source history window not reported"
     val cadence = feed.metricsSampleIntervalSeconds?.let { "every ${formatTrendDuration(it.toLong())}" } ?: "cadence not reported"
@@ -788,7 +821,10 @@ private fun TrendsScreen(feed: MobileFeed?) {
                 items(hostsWithMetrics, key = FleetHost::id) { host ->
                     FilterChip(
                         selected = host.id == selectedHost.id,
-                        onClick = { selectedHostID = host.id },
+                        onClick = {
+                            selectedHostID = host.id
+                            selectedTimestampMillis = null
+                        },
                         label = { Text(host.name, maxLines = 1) },
                     )
                 }
@@ -799,7 +835,10 @@ private fun TrendsScreen(feed: MobileFeed?) {
                 TrendWindow.entries.forEach { window ->
                     FilterChip(
                         selected = selectedWindow == window,
-                        onClick = { selectedWindow = window },
+                        onClick = {
+                            selectedWindow = window
+                            selectedTimestampMillis = null
+                        },
                         label = { Text(window.label) },
                     )
                 }
@@ -814,6 +853,9 @@ private fun TrendsScreen(feed: MobileFeed?) {
                 sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
             )
         }
+        selectedSample?.let { sample ->
+            item { TrendSelectionReadout(sample) }
+        }
         item {
             TrendChartCard(
                 title = "Network quality",
@@ -822,6 +864,8 @@ private fun TrendsScreen(feed: MobileFeed?) {
                 endAt = feed.generatedAt,
                 window = selectedWindow,
                 sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
+                selectedSample = selectedSample,
+                onSelectTimestamp = { selectedTimestampMillis = it.toEpochMilli() },
                 definitions = listOf(
                     TrendDefinition("Ping", MaterialTheme.colorScheme.secondary) { it.pingMs },
                     TrendDefinition("Jitter", MaterialTheme.colorScheme.primary) { it.jitterMs },
@@ -837,6 +881,8 @@ private fun TrendsScreen(feed: MobileFeed?) {
                 endAt = feed.generatedAt,
                 window = selectedWindow,
                 sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
+                selectedSample = selectedSample,
+                onSelectTimestamp = { selectedTimestampMillis = it.toEpochMilli() },
                 definitions = listOf(
                     TrendDefinition("SSH ready", MaterialTheme.colorScheme.primary) { it.sshReadyMs },
                     TrendDefinition("Full probe", MaterialTheme.colorScheme.tertiary) { it.fullProbeMs },
@@ -852,6 +898,8 @@ private fun TrendsScreen(feed: MobileFeed?) {
                 endAt = feed.generatedAt,
                 window = selectedWindow,
                 sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
+                selectedSample = selectedSample,
+                onSelectTimestamp = { selectedTimestampMillis = it.toEpochMilli() },
                 definitions = listOf(
                     TrendDefinition("Disk", MaterialTheme.colorScheme.tertiary) { it.diskPercent },
                     TrendDefinition("Memory", MaterialTheme.colorScheme.primary) { it.memoryPercent },
@@ -912,6 +960,39 @@ private fun TrendValueChip(label: String, value: String) {
 }
 
 @Composable
+private fun TrendSelectionReadout(sample: HostMetric) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f))) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Selected check", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                Text(
+                    DateTimeFormatter.ofPattern("MMM d, HH:mm:ss").withZone(ZoneId.systemDefault()).format(sample.capturedAt),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                sample.state.replaceFirstChar(Char::uppercase),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                sample.pingMs?.let { TrendValueChip("Ping", "${formatDecimal(it)} ms") }
+                sample.jitterMs?.let { TrendValueChip("Jitter", "${formatDecimal(it)} ms") }
+                sample.packetLossPercent?.let { TrendValueChip("Loss", "${formatDecimal(it)}%") }
+                sample.sshReadyMs?.let { TrendValueChip("SSH ready", "${formatDecimal(it)} ms") }
+                sample.fullProbeMs?.let { TrendValueChip("Full probe", "${formatDecimal(it)} ms") }
+                sample.diskPercent?.let { TrendValueChip("Disk", "${formatDecimal(it)}%") }
+                sample.memoryPercent?.let { TrendValueChip("Memory", "${formatDecimal(it)}%") }
+            }
+        }
+    }
+}
+
+@Composable
 private fun TrendChartCard(
     title: String,
     subtitle: String,
@@ -919,6 +1000,8 @@ private fun TrendChartCard(
     endAt: Instant,
     window: TrendWindow,
     sampleIntervalSeconds: Int?,
+    selectedSample: HostMetric?,
+    onSelectTimestamp: (Instant) -> Unit,
     definitions: List<TrendDefinition>,
     unit: String,
     fixedMaximum: Double? = null,
@@ -928,6 +1011,29 @@ private fun TrendChartCard(
     val startAt = endAt.minus(Duration.ofHours(window.hours.toLong()))
     val totalSeconds = Duration.between(startAt, endAt).seconds.coerceAtLeast(1)
     val gapThresholdSeconds = trendGapThresholdSeconds(window, sampleIntervalSeconds)
+    val selectionColor = MaterialTheme.colorScheme.onSurface
+    val chartModifier = Modifier
+        .fillMaxWidth()
+        .height(150.dp)
+        .pointerInput(startAt, endAt, onSelectTimestamp) {
+            fun selectAt(horizontalPosition: Float) {
+                if (size.width <= 0) return
+                val fraction = (horizontalPosition / size.width.toFloat()).coerceIn(0f, 1f)
+                val selectedSeconds = (totalSeconds * fraction).toLong()
+                onSelectTimestamp(startAt.plusSeconds(selectedSeconds))
+            }
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                selectAt(down.position.x)
+                do {
+                    val event = awaitPointerEvent()
+                    event.changes.firstOrNull()?.let { change ->
+                        selectAt(change.position.x)
+                        change.consume()
+                    }
+                } while (event.changes.any { it.pressed })
+            }
+        }
 
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(
@@ -952,7 +1058,7 @@ private fun TrendChartCard(
                 )
             } else {
                 val gridColor = MaterialTheme.colorScheme.outlineVariant
-                Canvas(modifier = Modifier.fillMaxWidth().height(150.dp)) {
+                Canvas(modifier = chartModifier) {
                     val top = 8f
                     val bottom = size.height - 8f
                     repeat(4) { index ->
@@ -984,17 +1090,29 @@ private fun TrendChartCard(
                                         cap = StrokeCap.Round,
                                     )
                                 }
-                                drawCircle(definition.color, radius = 3.5f, center = point)
+                                val isSelected = sample.capturedAt == selectedSample?.capturedAt
+                                drawCircle(definition.color, radius = if (isSelected) 6f else 3.5f, center = point)
                                 previousPoint = point
                                 previousAt = sample.capturedAt
                             }
                         }
                     }
+                    selectedSample?.let { selected ->
+                        val elapsed = Duration.between(startAt, selected.capturedAt).seconds
+                        val x = (elapsed.toDouble() / totalSeconds.toDouble()).coerceIn(0.0, 1.0).toFloat() * size.width
+                        drawLine(
+                            selectionColor.copy(alpha = 0.55f),
+                            Offset(x, top),
+                            Offset(x, bottom),
+                            strokeWidth = 2f,
+                        )
+                    }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(window.label + " ago", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Latest feed", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(dateTime(startAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(dateTime(endAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                Text("Tap or drag across any chart to inspect the nearest recorded check.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 definitions.forEach { definition ->

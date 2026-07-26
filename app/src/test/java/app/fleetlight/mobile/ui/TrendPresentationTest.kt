@@ -61,6 +61,23 @@ class TrendPresentationTest {
         assertEquals("2h 05m", formatTrendDuration(7500))
     }
 
+    @Test
+    fun nearestInspectionClampsAndPrefersEarlierOnTies() {
+        val samples = listOf(
+            metric("alpha", "2026-01-15T10:00:00Z", 10.0),
+            metric("alpha", "2026-01-15T11:00:00Z", 20.0),
+            metric("alpha", "2026-01-15T12:00:00Z", 30.0),
+        )
+
+        assertEquals(null, nearestTrendMetric(emptyList(), endAt))
+        assertEquals(10.0, nearestTrendMetric(samples, Instant.parse("2026-01-15T09:00:00Z"))?.pingMs)
+        assertEquals(30.0, nearestTrendMetric(samples, Instant.parse("2026-01-15T13:00:00Z"))?.pingMs)
+        assertEquals(20.0, nearestTrendMetric(samples, Instant.parse("2026-01-15T11:00:00Z"))?.pingMs)
+        assertEquals(10.0, nearestTrendMetric(samples, Instant.parse("2026-01-15T10:29:59Z"))?.pingMs)
+        assertEquals(20.0, nearestTrendMetric(samples, Instant.parse("2026-01-15T10:30:01Z"))?.pingMs)
+        assertEquals(10.0, nearestTrendMetric(samples, Instant.parse("2026-01-15T10:30:00Z"))?.pingMs)
+    }
+
     private fun metric(hostId: String, capturedAt: String, pingMs: Double) = HostMetric(
         hostId = hostId,
         capturedAt = Instant.parse(capturedAt),

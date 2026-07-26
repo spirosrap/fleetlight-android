@@ -5,6 +5,7 @@ import java.time.Instant
 data class MobileFeed(
     val schemaVersion: Int,
     val generatedAt: Instant,
+    val metricsWindowHours: Int? = null,
     val observer: FeedObserver,
     val summary: FleetSummary,
     val hosts: List<FleetHost>,

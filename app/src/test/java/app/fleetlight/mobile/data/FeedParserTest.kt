@@ -17,6 +17,7 @@ class FeedParserTest {
 
         assertEquals(1, feed.schemaVersion)
         assertEquals(Instant.parse("2026-01-15T12:00:00Z"), feed.generatedAt)
+        assertEquals(24, feed.metricsWindowHours)
         assertEquals("Primary Observer", feed.observer.name)
         assertEquals(3, feed.hosts.size)
         assertEquals(1, feed.summary.offline)
@@ -48,6 +49,7 @@ class FeedParserTest {
         assertEquals(HostState.UNKNOWN, feed.hosts.single().state)
         assertFalse(feed.linuxUpdates.any())
         assertFalse(feed.hosts.single().isPinned)
+        assertEquals(null, feed.metricsWindowHours)
     }
 
     @Test

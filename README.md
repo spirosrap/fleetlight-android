@@ -10,6 +10,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - Issue-first Fleet view with separate Offline, Slow, Access, Alert, Update, and Restart signals
 - Pinned-machine priority with a visible pin marker while preserving issue ordering within each priority group
 - Per-machine details for latency, health, resources, services, warnings, software versions, and restart status
+- Native Trends tab with machine selection, true 1h/6h/24h windows, ordered samples, and gap-safe network, connection, and resource charts
 - Always-visible per-machine installed versions and availability for Codex CLI, Codex Mac app, and Linux OS, with individual Install or Update controls
 - Authenticated **Check all** audit with determinate stage progress on compatible controllers, exact latest Codex versions, check freshness, Linux verification coverage, and resilient process-death recovery
 - Sequential Update all for eligible updates, plus Linux restart controls that intentionally operate on exactly one machine at a time
@@ -23,7 +24,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - `fleetlight://configure` endpoint links without compiling private addresses into the app
 - Optional stable release signing from an ignored properties file or environment variables
 
-- Version: **1.5.0 (9)**
+- Version: **1.6.0 (10)**
 - Application ID: `app.fleetlight.mobile`
 - Minimum Android: 8.0 / API 26
 - Compile and target SDK: 36
@@ -60,6 +61,7 @@ The app accepts lower-camel-case JSON with these top-level fields:
 {
   "schemaVersion": 1,
   "generatedAt": "2026-01-15T12:00:00Z",
+  "metricsWindowHours": 24,
   "observer": {},
   "summary": {},
   "hosts": [],
@@ -69,7 +71,7 @@ The app accepts lower-camel-case JSON with these top-level fields:
 }
 ```
 
-`schemaVersion` and a valid ISO-8601 `generatedAt` are required. Hosts may set `isPinned: true`; pinned hosts appear first and retain issue-first ordering within the pinned group. Feeds dated more than five minutes in the future are rejected so a misconfigured or untrusted observer cannot indefinitely outrank healthy sources. Incidents are immutable event-log entries rather than active/resolved records. Unknown fields are ignored and optional fields default safely. See [`fixtures/demo-feed.json`](fixtures/demo-feed.json) for a complete generic example.
+`schemaVersion` and a valid ISO-8601 `generatedAt` are required. `metricsWindowHours` reports how much history the observer intends to publish, while each Trends filter still uses the samples' real timestamps. Hosts may set `isPinned: true`; pinned hosts appear first and retain issue-first ordering within the pinned group. Feeds dated more than five minutes in the future are rejected so a misconfigured or untrusted observer cannot indefinitely outrank healthy sources. Incidents are immutable event-log entries rather than active/resolved records. Unknown fields are ignored and optional fields default safely. See [`fixtures/demo-feed.json`](fixtures/demo-feed.json) for a complete generic example.
 
 ## Build and test
 

@@ -1,6 +1,7 @@
 package app.fleetlight.mobile.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,12 +18,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -47,6 +50,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -72,8 +76,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -93,6 +99,7 @@ import app.fleetlight.mobile.data.FleetHost
 import app.fleetlight.mobile.data.FleetIncident
 import app.fleetlight.mobile.data.FleetSummary
 import app.fleetlight.mobile.data.HostState
+import app.fleetlight.mobile.data.HostMetric
 import app.fleetlight.mobile.data.LinuxUpdate
 import app.fleetlight.mobile.data.MobileFeed
 import app.fleetlight.mobile.data.PendingControlAction
@@ -112,6 +119,7 @@ import kotlin.math.roundToInt
 
 private enum class AppTab(val label: String, val icon: ImageVector) {
     FLEET("Fleet", Icons.Outlined.Computer),
+    TRENDS("Trends", Icons.AutoMirrored.Outlined.ShowChart),
     UPDATES("Updates", Icons.Outlined.SystemUpdateAlt),
     EVENTS("Events", Icons.Outlined.Event),
     SETTINGS("Settings", Icons.Outlined.Settings),
@@ -221,6 +229,7 @@ fun FleetlightContent(
                     onHostClick = { selectedHost = it },
                     onRecheckHosts = onRecheckHosts,
                 )
+                AppTab.TRENDS -> TrendsScreen(state.feed)
                 AppTab.UPDATES -> UpdatesScreen(state, onCheckForUpdates, onRequestUpdate, onDismissJob)
                 AppTab.EVENTS -> EventsScreen(state.feed)
                 AppTab.SETTINGS -> SettingsScreen(state, onSaveEndpoints, onStagePairing, onRevokeControl)
@@ -670,6 +679,287 @@ private fun DetailRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, fontWeight = FontWeight.Medium)
+    }
+}
+
+internal enum class TrendWindow(val hours: Int, val label: String) {
+    ONE_HOUR(1, "1h"),
+    SIX_HOURS(6, "6h"),
+    TWENTY_FOUR_HOURS(24, "24h"),
+}
+
+internal fun trendMetrics(
+    metrics: List<HostMetric>,
+    hostId: String,
+    endAt: Instant,
+    window: TrendWindow,
+): List<HostMetric> {
+    val startAt = endAt.minus(Duration.ofHours(window.hours.toLong()))
+    return metrics.asSequence()
+        .filter { it.hostId == hostId }
+        .filter { !it.capturedAt.isBefore(startAt) && !it.capturedAt.isAfter(endAt) }
+        .sortedBy(HostMetric::capturedAt)
+        .distinctBy(HostMetric::capturedAt)
+        .toList()
+}
+
+internal fun averageTrendValue(
+    metrics: List<HostMetric>,
+    value: (HostMetric) -> Double?,
+): Double? {
+    val values = metrics.mapNotNull(value)
+    return values.takeIf { it.isNotEmpty() }?.average()
+}
+
+private data class TrendDefinition(
+    val label: String,
+    val color: Color,
+    val value: (HostMetric) -> Double?,
+)
+
+@Composable
+private fun TrendsScreen(feed: MobileFeed?) {
+    if (feed == null) {
+        EmptyState(Icons.AutoMirrored.Outlined.ShowChart, "No trend data", "Connect a feed to view machine history.")
+        return
+    }
+
+    val metricHostIDs = remember(feed.metrics) { feed.metrics.map(HostMetric::hostId).toSet() }
+    val hostsWithMetrics = remember(feed.hosts, metricHostIDs) {
+        prioritizedFleetHosts(feed.hosts.filter { it.id in metricHostIDs })
+    }
+    if (hostsWithMetrics.isEmpty()) {
+        EmptyState(
+            Icons.AutoMirrored.Outlined.ShowChart,
+            "History is still collecting",
+            "Fleetlight will show trends after the observer publishes metric samples.",
+        )
+        return
+    }
+
+    var selectedHostID by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedWindow by rememberSaveable { mutableStateOf(TrendWindow.SIX_HOURS) }
+    val selectedHost = hostsWithMetrics.firstOrNull { it.id == selectedHostID } ?: hostsWithMetrics.first()
+    val samples = remember(feed.metrics, selectedHost.id, feed.generatedAt, selectedWindow) {
+        trendMetrics(feed.metrics, selectedHost.id, feed.generatedAt, selectedWindow)
+    }
+    val coverage = feed.metricsWindowHours?.let { "Source history: ${it}h" } ?: "Source history window not reported"
+
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SectionHeading(
+                title = "Trends",
+                subtitle = "$coverage · ${feed.metrics.size} fleet samples",
+            )
+        }
+        item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(hostsWithMetrics, key = FleetHost::id) { host ->
+                    FilterChip(
+                        selected = host.id == selectedHost.id,
+                        onClick = { selectedHostID = host.id },
+                        label = { Text(host.name, maxLines = 1) },
+                    )
+                }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TrendWindow.entries.forEach { window ->
+                    FilterChip(
+                        selected = selectedWindow == window,
+                        onClick = { selectedWindow = window },
+                        label = { Text(window.label) },
+                    )
+                }
+            }
+        }
+        item {
+            TrendSummary(
+                hostName = selectedHost.name,
+                samples = samples,
+                window = selectedWindow,
+            )
+        }
+        item {
+            TrendChartCard(
+                title = "Network quality",
+                subtitle = "Ping RTT and jitter",
+                samples = samples,
+                endAt = feed.generatedAt,
+                window = selectedWindow,
+                definitions = listOf(
+                    TrendDefinition("Ping", MaterialTheme.colorScheme.secondary) { it.pingMs },
+                    TrendDefinition("Jitter", MaterialTheme.colorScheme.primary) { it.jitterMs },
+                ),
+                unit = "ms",
+            )
+        }
+        item {
+            TrendChartCard(
+                title = "Connection timing",
+                subtitle = "SSH ready versus the complete probe",
+                samples = samples,
+                endAt = feed.generatedAt,
+                window = selectedWindow,
+                definitions = listOf(
+                    TrendDefinition("SSH ready", MaterialTheme.colorScheme.primary) { it.sshReadyMs },
+                    TrendDefinition("Full probe", MaterialTheme.colorScheme.tertiary) { it.fullProbeMs },
+                ),
+                unit = "ms",
+            )
+        }
+        item {
+            TrendChartCard(
+                title = "Resource usage",
+                subtitle = "Disk and memory used",
+                samples = samples,
+                endAt = feed.generatedAt,
+                window = selectedWindow,
+                definitions = listOf(
+                    TrendDefinition("Disk", MaterialTheme.colorScheme.tertiary) { it.diskPercent },
+                    TrendDefinition("Memory", MaterialTheme.colorScheme.primary) { it.memoryPercent },
+                ),
+                unit = "%",
+                fixedMaximum = 100.0,
+            )
+        }
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+@Composable
+private fun TrendSummary(hostName: String, samples: List<HostMetric>, window: TrendWindow) {
+    val ping = averageTrendValue(samples, HostMetric::pingMs)
+    val ready = averageTrendValue(samples, HostMetric::sshReadyMs)
+    val loss = averageTrendValue(samples, HostMetric::packetLossPercent)
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(hostName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "${samples.size} ordered sample${if (samples.size == 1) "" else "s"} in ${window.label}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TrendValueChip("Avg ping", ping?.let { "${formatDecimal(it)} ms" } ?: "—")
+                TrendValueChip("Avg ready", ready?.let { "${formatDecimal(it)} ms" } ?: "—")
+                TrendValueChip("Avg loss", loss?.let { "${formatDecimal(it)}%" } ?: "—")
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrendValueChip(label: String, value: String) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(12.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun TrendChartCard(
+    title: String,
+    subtitle: String,
+    samples: List<HostMetric>,
+    endAt: Instant,
+    window: TrendWindow,
+    definitions: List<TrendDefinition>,
+    unit: String,
+    fixedMaximum: Double? = null,
+) {
+    val values = definitions.flatMap { definition -> samples.mapNotNull(definition.value) }
+    val maximum = fixedMaximum ?: values.maxOrNull()?.let { (it * 1.12).coerceAtLeast(1.0) }
+    val startAt = endAt.minus(Duration.ofHours(window.hours.toLong()))
+    val totalSeconds = Duration.between(startAt, endAt).seconds.coerceAtLeast(1)
+    val gapThresholdSeconds = maxOf(45 * 60L, totalSeconds / 6)
+
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                maximum?.let {
+                    Text("Scale ${formatDecimal(it)} $unit", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (maximum == null) {
+                Text(
+                    "No values in this window",
+                    modifier = Modifier.padding(vertical = 44.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                val gridColor = MaterialTheme.colorScheme.outlineVariant
+                Canvas(modifier = Modifier.fillMaxWidth().height(150.dp)) {
+                    val top = 8f
+                    val bottom = size.height - 8f
+                    repeat(4) { index ->
+                        val y = top + (bottom - top) * index / 3f
+                        drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+                    }
+                    definitions.forEach { definition ->
+                        var previousPoint: Offset? = null
+                        var previousAt: Instant? = null
+                        samples.forEach { sample ->
+                            val value = definition.value(sample)
+                            if (value == null) {
+                                previousPoint = null
+                                previousAt = null
+                            } else {
+                                val elapsed = Duration.between(startAt, sample.capturedAt).seconds
+                                val x = (elapsed.toDouble() / totalSeconds.toDouble()).coerceIn(0.0, 1.0).toFloat() * size.width
+                                val yFraction = (value / maximum).coerceIn(0.0, 1.0).toFloat()
+                                val point = Offset(x, bottom - yFraction * (bottom - top))
+                                val previousTimestamp = previousAt
+                                if (previousPoint != null && previousTimestamp != null &&
+                                    Duration.between(previousTimestamp, sample.capturedAt).seconds <= gapThresholdSeconds
+                                ) {
+                                    drawLine(
+                                        definition.color,
+                                        previousPoint!!,
+                                        point,
+                                        strokeWidth = 4f,
+                                        cap = StrokeCap.Round,
+                                    )
+                                }
+                                drawCircle(definition.color, radius = 3.5f, center = point)
+                                previousPoint = point
+                                previousAt = sample.capturedAt
+                            }
+                        }
+                    }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(window.label + " ago", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Latest feed", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                definitions.forEach { definition ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(color = definition.color, shape = CircleShape, modifier = Modifier.size(8.dp)) {}
+                        Spacer(Modifier.width(5.dp))
+                        Text(definition.label, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
     }
 }
 

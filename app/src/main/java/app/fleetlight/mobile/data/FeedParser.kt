@@ -36,6 +36,7 @@ class FeedParser(
         return MobileFeed(
             schemaVersion = schemaVersion,
             generatedAt = generatedAt,
+            metricsWindowHours = root.int("metricsWindowHours")?.takeIf { it > 0 },
             observer = parseObserver(root["observer"]),
             summary = parseSummary(root.obj("summary")),
             hosts = root.array("hosts").mapIndexedNotNull(::parseHost),

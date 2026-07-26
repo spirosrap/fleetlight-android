@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "generatedAt": "2026-01-15T12:00:00Z",
   "metricsWindowHours": 24,
+  "metricsSampleIntervalSeconds": 1800,
   "observer": {
     "id": "primary-observer",
     "name": "Primary Observer",

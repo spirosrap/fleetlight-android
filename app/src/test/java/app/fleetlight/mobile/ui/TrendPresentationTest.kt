@@ -37,6 +37,30 @@ class TrendPresentationTest {
         assertEquals(null, averageTrendValue(samples, HostMetric::jitterMs))
     }
 
+    @Test
+    fun coverageUsesPublishedCadenceAndCapsManualExtraSamples() {
+        val threeSamples = listOf(
+            metric("alpha", "2026-01-15T11:00:00Z", 20.0),
+            metric("alpha", "2026-01-15T11:30:00Z", 30.0),
+            metric("alpha", "2026-01-15T12:00:00Z", 40.0),
+        )
+
+        assertEquals(100, trendCoveragePercent(threeSamples, TrendWindow.ONE_HOUR, 1800))
+        assertEquals(60, trendCoveragePercent(threeSamples.take(3), TrendWindow.ONE_HOUR, 900))
+        assertEquals(null, trendCoveragePercent(threeSamples, TrendWindow.ONE_HOUR, null))
+        assertEquals(100, trendCoveragePercent(threeSamples + threeSamples, TrendWindow.ONE_HOUR, 3600))
+    }
+
+    @Test
+    fun gapThresholdTracksCadenceAndLegacyFeedsRemainBounded() {
+        assertEquals(5_400L, trendGapThresholdSeconds(TrendWindow.SIX_HOURS, 1800))
+        assertEquals(90L, trendGapThresholdSeconds(TrendWindow.ONE_HOUR, 10))
+        assertEquals(3_600L, trendGapThresholdSeconds(TrendWindow.SIX_HOURS, null))
+        assertEquals("45 sec", formatTrendDuration(45))
+        assertEquals("30 min", formatTrendDuration(1800))
+        assertEquals("2h 05m", formatTrendDuration(7500))
+    }
+
     private fun metric(hostId: String, capturedAt: String, pingMs: Double) = HostMetric(
         hostId = hostId,
         capturedAt = Instant.parse(capturedAt),

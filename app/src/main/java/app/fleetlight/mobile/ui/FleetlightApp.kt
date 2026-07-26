@@ -711,6 +711,33 @@ internal fun averageTrendValue(
     return values.takeIf { it.isNotEmpty() }?.average()
 }
 
+internal fun trendCoveragePercent(
+    samples: List<HostMetric>,
+    window: TrendWindow,
+    sampleIntervalSeconds: Int?,
+): Int? {
+    val interval = sampleIntervalSeconds?.takeIf { it > 0 } ?: return null
+    val expected = (Duration.ofHours(window.hours.toLong()).seconds / interval).toInt() + 1
+    if (expected <= 0) return null
+    return ((samples.size * 100.0) / expected).roundToInt().coerceIn(0, 100)
+}
+
+internal fun trendGapThresholdSeconds(
+    window: TrendWindow,
+    sampleIntervalSeconds: Int?,
+): Long = sampleIntervalSeconds
+    ?.takeIf { it > 0 }
+    ?.toLong()
+    ?.times(3)
+    ?.coerceAtLeast(90L)
+    ?: maxOf(45 * 60L, Duration.ofHours(window.hours.toLong()).seconds / 6)
+
+internal fun formatTrendDuration(seconds: Long): String = when {
+    seconds < 60 -> "${seconds.coerceAtLeast(0)} sec"
+    seconds < 3_600 -> "${seconds / 60} min"
+    else -> "${seconds / 3_600}h ${((seconds % 3_600) / 60).toString().padStart(2, '0')}m"
+}
+
 private data class TrendDefinition(
     val label: String,
     val color: Color,
@@ -744,6 +771,7 @@ private fun TrendsScreen(feed: MobileFeed?) {
         trendMetrics(feed.metrics, selectedHost.id, feed.generatedAt, selectedWindow)
     }
     val coverage = feed.metricsWindowHours?.let { "Source history: ${it}h" } ?: "Source history window not reported"
+    val cadence = feed.metricsSampleIntervalSeconds?.let { "every ${formatTrendDuration(it.toLong())}" } ?: "cadence not reported"
 
     LazyColumn(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
@@ -752,7 +780,7 @@ private fun TrendsScreen(feed: MobileFeed?) {
         item {
             SectionHeading(
                 title = "Trends",
-                subtitle = "$coverage · ${feed.metrics.size} fleet samples",
+                subtitle = "$coverage · $cadence · ${feed.metrics.size} fleet samples",
             )
         }
         item {
@@ -782,6 +810,8 @@ private fun TrendsScreen(feed: MobileFeed?) {
                 hostName = selectedHost.name,
                 samples = samples,
                 window = selectedWindow,
+                endAt = feed.generatedAt,
+                sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
             )
         }
         item {
@@ -791,6 +821,7 @@ private fun TrendsScreen(feed: MobileFeed?) {
                 samples = samples,
                 endAt = feed.generatedAt,
                 window = selectedWindow,
+                sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
                 definitions = listOf(
                     TrendDefinition("Ping", MaterialTheme.colorScheme.secondary) { it.pingMs },
                     TrendDefinition("Jitter", MaterialTheme.colorScheme.primary) { it.jitterMs },
@@ -805,6 +836,7 @@ private fun TrendsScreen(feed: MobileFeed?) {
                 samples = samples,
                 endAt = feed.generatedAt,
                 window = selectedWindow,
+                sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
                 definitions = listOf(
                     TrendDefinition("SSH ready", MaterialTheme.colorScheme.primary) { it.sshReadyMs },
                     TrendDefinition("Full probe", MaterialTheme.colorScheme.tertiary) { it.fullProbeMs },
@@ -819,6 +851,7 @@ private fun TrendsScreen(feed: MobileFeed?) {
                 samples = samples,
                 endAt = feed.generatedAt,
                 window = selectedWindow,
+                sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
                 definitions = listOf(
                     TrendDefinition("Disk", MaterialTheme.colorScheme.tertiary) { it.diskPercent },
                     TrendDefinition("Memory", MaterialTheme.colorScheme.primary) { it.memoryPercent },
@@ -832,10 +865,18 @@ private fun TrendsScreen(feed: MobileFeed?) {
 }
 
 @Composable
-private fun TrendSummary(hostName: String, samples: List<HostMetric>, window: TrendWindow) {
+private fun TrendSummary(
+    hostName: String,
+    samples: List<HostMetric>,
+    window: TrendWindow,
+    endAt: Instant,
+    sampleIntervalSeconds: Int?,
+) {
     val ping = averageTrendValue(samples, HostMetric::pingMs)
     val ready = averageTrendValue(samples, HostMetric::sshReadyMs)
     val loss = averageTrendValue(samples, HostMetric::packetLossPercent)
+    val coverage = trendCoveragePercent(samples, window, sampleIntervalSeconds)
+    val freshness = samples.lastOrNull()?.let { Duration.between(it.capturedAt, endAt).seconds.coerceAtLeast(0) }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -843,7 +884,11 @@ private fun TrendSummary(hostName: String, samples: List<HostMetric>, window: Tr
         ) {
             Text(hostName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
-                "${samples.size} ordered sample${if (samples.size == 1) "" else "s"} in ${window.label}",
+                buildString {
+                    append("${samples.size} ordered sample${if (samples.size == 1) "" else "s"} in ${window.label}")
+                    coverage?.let { append(" · $it% coverage") }
+                    freshness?.let { append(" · latest ${formatTrendDuration(it)} ago") }
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -873,6 +918,7 @@ private fun TrendChartCard(
     samples: List<HostMetric>,
     endAt: Instant,
     window: TrendWindow,
+    sampleIntervalSeconds: Int?,
     definitions: List<TrendDefinition>,
     unit: String,
     fixedMaximum: Double? = null,
@@ -881,7 +927,7 @@ private fun TrendChartCard(
     val maximum = fixedMaximum ?: values.maxOrNull()?.let { (it * 1.12).coerceAtLeast(1.0) }
     val startAt = endAt.minus(Duration.ofHours(window.hours.toLong()))
     val totalSeconds = Duration.between(startAt, endAt).seconds.coerceAtLeast(1)
-    val gapThresholdSeconds = maxOf(45 * 60L, totalSeconds / 6)
+    val gapThresholdSeconds = trendGapThresholdSeconds(window, sampleIntervalSeconds)
 
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(

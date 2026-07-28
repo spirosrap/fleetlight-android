@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ShowChart
+import androidx.compose.material.icons.automirrored.outlined.CompareArrows
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -122,7 +123,7 @@ import kotlin.math.roundToInt
 
 private enum class AppTab(val label: String, val icon: ImageVector) {
     FLEET("Fleet", Icons.Outlined.Computer),
-    TRENDS("Trends", Icons.AutoMirrored.Outlined.ShowChart),
+    TRENDS("Insights", Icons.AutoMirrored.Outlined.ShowChart),
     UPDATES("Updates", Icons.Outlined.SystemUpdateAlt),
     EVENTS("Events", Icons.Outlined.Event),
     SETTINGS("Settings", Icons.Outlined.Settings),
@@ -232,7 +233,7 @@ fun FleetlightContent(
                     onHostClick = { selectedHost = it },
                     onRecheckHosts = onRecheckHosts,
                 )
-                AppTab.TRENDS -> TrendsScreen(state.feed)
+                AppTab.TRENDS -> InsightsScreen(state.feed)
                 AppTab.UPDATES -> UpdatesScreen(state, onCheckForUpdates, onRequestUpdate, onDismissJob)
                 AppTab.EVENTS -> EventsScreen(state.feed)
                 AppTab.SETTINGS -> SettingsScreen(state, onSaveEndpoints, onStagePairing, onRevokeControl)
@@ -683,6 +684,253 @@ private fun DetailRow(label: String, value: String) {
         Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, fontWeight = FontWeight.Medium)
     }
+}
+
+private enum class InsightMode(val label: String) {
+    COMPARE("Compare"),
+    TRENDS("Trends"),
+}
+
+@Composable
+private fun InsightsScreen(feed: MobileFeed?) {
+    var selectedMode by rememberSaveable { mutableStateOf(InsightMode.COMPARE) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            InsightMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = selectedMode == mode,
+                    onClick = { selectedMode = mode },
+                    label = { Text(mode.label) },
+                    leadingIcon = if (mode == InsightMode.COMPARE) {
+                        { Icon(Icons.AutoMirrored.Outlined.CompareArrows, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    } else {
+                        { Icon(Icons.AutoMirrored.Outlined.ShowChart, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    },
+                )
+            }
+        }
+        HorizontalDivider()
+        Box(modifier = Modifier.weight(1f)) {
+            when (selectedMode) {
+                InsightMode.COMPARE -> ComparisonScreen(feed)
+                InsightMode.TRENDS -> TrendsScreen(feed)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ComparisonScreen(feed: MobileFeed?) {
+    if (feed == null) {
+        EmptyState(Icons.AutoMirrored.Outlined.CompareArrows, "No comparison data", "Connect a feed to compare live machine timing.")
+        return
+    }
+
+    var selectedMetric by rememberSaveable { mutableStateOf(FleetComparisonMetric.PING) }
+    val ranks = remember(feed.hosts, feed.observer.id, selectedMetric) {
+        fleetComparisonRanks(feed.hosts, feed.observer.id, selectedMetric)
+    }
+    val measuredRanks = remember(ranks) { ranks.filter { it.valueMilliseconds != null } }
+    val summary = remember(ranks) { fleetComparisonSummary(ranks) }
+    val maximumValue = measuredRanks.maxOfOrNull { it.valueMilliseconds ?: 0.0 }?.coerceAtLeast(1.0) ?: 1.0
+    val best = measuredRanks.firstOrNull()
+
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SectionHeading(
+                title = "Fleet comparison",
+                subtitle = "Current feed timings ranked fastest to slowest",
+            )
+        }
+        item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(FleetComparisonMetric.entries) { metric ->
+                    FilterChip(
+                        selected = selectedMetric == metric,
+                        onClick = { selectedMetric = metric },
+                        label = { Text(metric.label) },
+                    )
+                }
+            }
+        }
+        item {
+            ComparisonSummaryCard(
+                fastestName = best?.host?.name,
+                summary = summary,
+                observerExcluded = ranks.any(FleetComparisonRank::isObserver),
+            )
+        }
+        if (measuredRanks.isEmpty()) {
+            item {
+                InlineEmpty("No live ${selectedMetric.label.lowercase()} measurements yet. Reload after the controller finishes probing the fleet.")
+            }
+        } else {
+            items(ranks, key = { it.host.id }) { rank ->
+                ComparisonRankCard(
+                    rank = rank,
+                    metric = selectedMetric,
+                    position = measuredRanks.indexOfFirst { it.host.id == rank.host.id }
+                        .takeIf { it >= 0 }
+                        ?.plus(1),
+                    bestMilliseconds = summary.bestMilliseconds,
+                    maximumMilliseconds = maximumValue,
+                )
+            }
+        }
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+@Composable
+private fun ComparisonSummaryCard(
+    fastestName: String?,
+    summary: FleetComparisonSummary,
+    observerExcluded: Boolean,
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ComparisonStat("Fastest", fastestName ?: "—", Modifier.weight(1f))
+                ComparisonStat("Typical", summary.medianMilliseconds?.let(::formatComparisonDuration) ?: "—", Modifier.weight(1f))
+                ComparisonStat("Spread", summary.spreadMilliseconds?.let(::formatComparisonDuration) ?: "—", Modifier.weight(1f))
+            }
+            Text(
+                if (observerExcluded) {
+                    "${summary.measuredCount} of ${summary.remoteCount} remote machine${if (summary.remoteCount == 1) "" else "s"} measured · this observer is excluded"
+                } else {
+                    "${summary.measuredCount} of ${summary.remoteCount} machines measured · observer identity not reported"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComparisonStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            value,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun ComparisonRankCard(
+    rank: FleetComparisonRank,
+    metric: FleetComparisonMetric,
+    position: Int?,
+    bestMilliseconds: Double?,
+    maximumMilliseconds: Double,
+) {
+    val color = when (metric) {
+        FleetComparisonMetric.PING -> MaterialTheme.colorScheme.secondary
+        FleetComparisonMetric.SSH_READY -> MaterialTheme.colorScheme.primary
+        FleetComparisonMetric.CHECKS -> MaterialTheme.colorScheme.tertiary
+        FleetComparisonMetric.FULL_PROBE -> MaterialTheme.colorScheme.error
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    position?.toString() ?: "—",
+                    modifier = Modifier.width(24.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = if (position == 1) color else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(rank.host.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                if (position == 1) {
+                    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(999.dp)) {
+                        Text(
+                            "FASTEST",
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = color,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(comparisonValueLabel(rank), fontWeight = FontWeight.Bold, color = comparisonRankColor(rank))
+                comparisonDelta(rank.valueMilliseconds, bestMilliseconds)?.let { delta ->
+                    Spacer(Modifier.width(6.dp))
+                    Text(delta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            rank.valueMilliseconds?.let { value ->
+                LinearProgressIndicator(
+                    progress = { (value / maximumMilliseconds).toFloat().coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = color,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                )
+            }
+            Text(
+                comparisonDetail(rank, metric),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun comparisonRankColor(rank: FleetComparisonRank): Color = when {
+    rank.isObserver -> MaterialTheme.colorScheme.onSurfaceVariant
+    rank.host.state == HostState.OFFLINE -> MaterialTheme.colorScheme.error
+    rank.valueMilliseconds == null -> MaterialTheme.colorScheme.onSurfaceVariant
+    else -> MaterialTheme.colorScheme.onSurface
+}
+
+private fun comparisonValueLabel(rank: FleetComparisonRank): String = when {
+    rank.isObserver -> "Observer"
+    rank.valueMilliseconds != null -> formatComparisonDuration(rank.valueMilliseconds)
+    rank.host.state == HostState.OFFLINE -> "Offline"
+    else -> "No data"
+}
+
+private fun comparisonDelta(value: Double?, best: Double?): String? {
+    if (value == null || best == null || value <= best) return null
+    return "+${formatComparisonDuration(value - best)}"
+}
+
+private fun comparisonDetail(rank: FleetComparisonRank, metric: FleetComparisonMetric): String {
+    if (rank.isObserver) return "Local process timing is not comparable with remote SSH machines"
+    if (!rank.host.state.isLiveForComparison()) return rank.host.detail ?: rank.host.status.replaceFirstChar(Char::uppercase)
+    return when (metric) {
+        FleetComparisonMetric.PING -> listOfNotNull(
+            rank.host.jitterMs?.let { "jitter ${formatComparisonDuration(it)}" },
+            rank.host.packetLossPercent?.let { "loss ${formatDecimal(it)}%" },
+        ).joinToString(" · ").ifBlank { "Round-trip network time" }
+        FleetComparisonMetric.SSH_READY -> rank.host.pingMs?.let { "ping ${formatComparisonDuration(it)}" }
+            ?: "Time until the SSH connection is ready"
+        FleetComparisonMetric.CHECKS -> "Remote metrics and service work after SSH is ready"
+        FleetComparisonMetric.FULL_PROBE -> listOfNotNull(
+            rank.host.sshReadyMs?.let { "SSH ${formatComparisonDuration(it)}" },
+            FleetComparisonMetric.CHECKS.value(rank.host)?.let { "checks ${formatComparisonDuration(it)}" },
+        ).joinToString(" + ").ifBlank { "Complete remote probe time" }
+    }
+}
+
+private fun formatComparisonDuration(milliseconds: Double): String = when {
+    milliseconds >= 1_000 -> "%.2f s".format(milliseconds / 1_000.0)
+    else -> "${formatDecimal(milliseconds)} ms"
 }
 
 internal enum class TrendWindow(val hours: Int, val label: String) {

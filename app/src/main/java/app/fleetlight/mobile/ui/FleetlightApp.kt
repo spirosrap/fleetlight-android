@@ -731,8 +731,27 @@ private fun ComparisonScreen(feed: MobileFeed?) {
     }
 
     var selectedMetric by rememberSaveable { mutableStateOf(FleetComparisonMetric.PING) }
-    val ranks = remember(feed.hosts, feed.observer.id, selectedMetric) {
-        fleetComparisonRanks(feed.hosts, feed.observer.id, selectedMetric)
+    var selectedWindow by rememberSaveable { mutableStateOf(FleetComparisonWindow.NOW) }
+    val ranks = remember(
+        feed.hosts,
+        feed.metrics,
+        feed.generatedAt,
+        feed.observer.id,
+        selectedMetric,
+        selectedWindow,
+    ) {
+        if (selectedWindow == FleetComparisonWindow.NOW) {
+            fleetComparisonRanks(feed.hosts, feed.observer.id, selectedMetric)
+        } else {
+            historicalFleetComparisonRanks(
+                hosts = feed.hosts,
+                observerId = feed.observer.id,
+                metrics = feed.metrics,
+                endAt = feed.generatedAt,
+                window = selectedWindow,
+                metric = selectedMetric,
+            )
+        }
     }
     val measuredRanks = remember(ranks) { ranks.filter { it.valueMilliseconds != null } }
     val summary = remember(ranks) { fleetComparisonSummary(ranks) }
@@ -746,7 +765,11 @@ private fun ComparisonScreen(feed: MobileFeed?) {
         item {
             SectionHeading(
                 title = "Fleet comparison",
-                subtitle = "Current feed timings ranked fastest to slowest",
+                subtitle = if (selectedWindow == FleetComparisonWindow.NOW) {
+                    "Current feed timings ranked fastest to slowest"
+                } else {
+                    "Verified ${selectedWindow.label} averages ranked fastest to slowest"
+                },
             )
         }
         item {
@@ -761,15 +784,34 @@ private fun ComparisonScreen(feed: MobileFeed?) {
             }
         }
         item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(FleetComparisonWindow.entries) { window ->
+                    FilterChip(
+                        selected = selectedWindow == window,
+                        onClick = { selectedWindow = window },
+                        label = { Text(window.label) },
+                    )
+                }
+            }
+        }
+        item {
             ComparisonSummaryCard(
                 fastestName = best?.host?.name,
                 summary = summary,
                 observerExcluded = ranks.any(FleetComparisonRank::isObserver),
+                window = selectedWindow,
+                historicalSampleCount = ranks.sumOf { it.sampleCount ?: 0 },
             )
         }
         if (measuredRanks.isEmpty()) {
             item {
-                InlineEmpty("No live ${selectedMetric.label.lowercase()} measurements yet. Reload after the controller finishes probing the fleet.")
+                InlineEmpty(
+                    if (selectedWindow == FleetComparisonWindow.NOW) {
+                        "No live ${selectedMetric.label.lowercase()} measurements yet. Reload after the controller finishes probing the fleet."
+                    } else {
+                        "No verified ${selectedMetric.label.lowercase()} history in ${selectedWindow.label} yet."
+                    },
+                )
             }
         } else {
             items(ranks, key = { it.host.id }) { rank ->
@@ -781,6 +823,7 @@ private fun ComparisonScreen(feed: MobileFeed?) {
                         ?.plus(1),
                     bestMilliseconds = summary.bestMilliseconds,
                     maximumMilliseconds = maximumValue,
+                    window = selectedWindow,
                 )
             }
         }
@@ -793,6 +836,8 @@ private fun ComparisonSummaryCard(
     fastestName: String?,
     summary: FleetComparisonSummary,
     observerExcluded: Boolean,
+    window: FleetComparisonWindow,
+    historicalSampleCount: Int,
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -803,9 +848,20 @@ private fun ComparisonSummaryCard(
             }
             Text(
                 if (observerExcluded) {
-                    "${summary.measuredCount} of ${summary.remoteCount} remote machine${if (summary.remoteCount == 1) "" else "s"} measured · this observer is excluded"
+                    buildString {
+                        append("${summary.measuredCount} of ${summary.remoteCount} remote machine${if (summary.remoteCount == 1) "" else "s"} measured")
+                        if (window == FleetComparisonWindow.NOW) {
+                            append(" · this observer is excluded")
+                        } else {
+                            append(" · $historicalSampleCount verified samples · observer excluded")
+                        }
+                    }
                 } else {
-                    "${summary.measuredCount} of ${summary.remoteCount} machines measured · observer identity not reported"
+                    buildString {
+                        append("${summary.measuredCount} of ${summary.remoteCount} machines measured")
+                        if (window != FleetComparisonWindow.NOW) append(" · $historicalSampleCount verified samples")
+                        append(" · observer identity not reported")
+                    }
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -835,6 +891,7 @@ private fun ComparisonRankCard(
     position: Int?,
     bestMilliseconds: Double?,
     maximumMilliseconds: Double,
+    window: FleetComparisonWindow,
 ) {
     val color = when (metric) {
         FleetComparisonMetric.PING -> MaterialTheme.colorScheme.secondary
@@ -880,7 +937,7 @@ private fun ComparisonRankCard(
                 )
             }
             Text(
-                comparisonDetail(rank, metric),
+                comparisonDetail(rank, metric, window),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
@@ -893,6 +950,7 @@ private fun ComparisonRankCard(
 @Composable
 private fun comparisonRankColor(rank: FleetComparisonRank): Color = when {
     rank.isObserver -> MaterialTheme.colorScheme.onSurfaceVariant
+    rank.sampleCount != null && rank.valueMilliseconds != null -> MaterialTheme.colorScheme.onSurface
     rank.host.state == HostState.OFFLINE -> MaterialTheme.colorScheme.error
     rank.valueMilliseconds == null -> MaterialTheme.colorScheme.onSurfaceVariant
     else -> MaterialTheme.colorScheme.onSurface
@@ -910,8 +968,23 @@ private fun comparisonDelta(value: Double?, best: Double?): String? {
     return "+${formatComparisonDuration(value - best)}"
 }
 
-private fun comparisonDetail(rank: FleetComparisonRank, metric: FleetComparisonMetric): String {
+private fun comparisonDetail(
+    rank: FleetComparisonRank,
+    metric: FleetComparisonMetric,
+    window: FleetComparisonWindow,
+): String {
     if (rank.isObserver) return "Local process timing is not comparable with remote SSH machines"
+    rank.sampleCount?.let { count ->
+        if (count == 0) return "No verified ${metric.label.lowercase()} samples in ${window.label}"
+        val currentState = if (rank.host.state.isLiveForComparison()) {
+            null
+        } else {
+            "currently ${rank.host.status.lowercase()}"
+        }
+        return listOf("$count verified sample${if (count == 1) "" else "s"}", "${window.label} average", currentState)
+            .filterNotNull()
+            .joinToString(" · ")
+    }
     if (!rank.host.state.isLiveForComparison()) return rank.host.detail ?: rank.host.status.replaceFirstChar(Char::uppercase)
     return when (metric) {
         FleetComparisonMetric.PING -> listOfNotNull(

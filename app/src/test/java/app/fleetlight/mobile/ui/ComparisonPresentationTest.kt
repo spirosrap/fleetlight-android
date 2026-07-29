@@ -1,7 +1,9 @@
 package app.fleetlight.mobile.ui
 
 import app.fleetlight.mobile.data.FleetHost
+import app.fleetlight.mobile.data.HostMetric
 import app.fleetlight.mobile.data.HostState
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -93,6 +95,80 @@ class ComparisonPresentationTest {
         assertEquals(5.0, legacyRanks.single().valueMilliseconds ?: -1.0, 0.0)
     }
 
+    @Test
+    fun historicalRanksUseVerifiedWindowSamplesAndKeepOfflineHistory() {
+        val endAt = Instant.parse("2026-01-15T12:00:00Z")
+        val hosts = listOf(
+            host("observer", "Observer", ping = 1.0),
+            host("offline", "Offline now", state = HostState.OFFLINE),
+            host("steady", "Steady"),
+            host("empty", "Empty"),
+        )
+        val metrics = listOf(
+            metric("offline", "2026-01-15T11:10:00Z", "online", ping = 10.0),
+            metric("offline", "2026-01-15T11:20:00Z", "online", ping = 10.0),
+            metric("steady", "2026-01-15T11:15:00Z", "unreachable", ping = 1.0),
+            metric("steady", "2026-01-15T11:15:00Z", "online", ping = 20.0),
+            metric("steady", "2026-01-15T11:15:00Z", "online", ping = 999.0),
+            metric("steady", "2026-01-15T11:45:00Z", "unreachable", ping = 1.0),
+            metric("steady", "2026-01-15T11:35:00Z", "attention", ping = 2.0),
+            metric("steady", "2026-01-15T11:40:00Z", "online", ping = -5.0),
+            metric("steady", "2026-01-15T11:50:00Z", "online", ping = Double.NaN),
+            metric("steady", "2026-01-15T10:00:00Z", "online", ping = 2.0),
+            metric("steady", "2026-01-15T12:01:00Z", "online", ping = 3.0),
+            metric("observer", "2026-01-15T11:30:00Z", "online", ping = 1.0),
+            metric("other", "2026-01-15T11:30:00Z", "online", ping = 4.0),
+        )
+
+        val ranks = historicalFleetComparisonRanks(
+            hosts,
+            "observer",
+            metrics,
+            endAt,
+            FleetComparisonWindow.ONE_HOUR,
+            FleetComparisonMetric.PING,
+        )
+
+        assertEquals(listOf("offline", "steady", "empty", "observer"), ranks.map { it.host.id })
+        assertEquals(listOf(10.0, 20.0, null, null), ranks.map { it.valueMilliseconds })
+        assertEquals(listOf(2, 1, 0, 0), ranks.map { it.sampleCount })
+        assertEquals(HostState.OFFLINE, ranks[0].host.state)
+    }
+
+    @Test
+    fun equalMeasurementsUseStableHostIdTieBreak() {
+        val ranks = fleetComparisonRanks(
+            hosts = listOf(
+                host("z-id", "Same", ping = 20.0),
+                host("a-id", "Same", ping = 20.0),
+            ),
+            observerId = "observer",
+            metric = FleetComparisonMetric.PING,
+        )
+
+        assertEquals(listOf("a-id", "z-id"), ranks.map { it.host.id })
+    }
+
+    @Test
+    fun historicalChecksIgnoreMissingAndInvalidPairs() {
+        val endAt = Instant.parse("2026-01-15T12:00:00Z")
+        val ranks = historicalFleetComparisonRanks(
+            hosts = listOf(host("machine", "Machine")),
+            observerId = "observer",
+            metrics = listOf(
+                metric("machine", "2026-01-15T11:10:00Z", "online", ready = 100.0, probe = 250.0),
+                metric("machine", "2026-01-15T11:20:00Z", "online", ready = 300.0, probe = 250.0),
+                metric("machine", "2026-01-15T11:30:00Z", "online", ready = 100.0),
+            ),
+            endAt = endAt,
+            window = FleetComparisonWindow.ONE_HOUR,
+            metric = FleetComparisonMetric.CHECKS,
+        )
+
+        assertEquals(150.0, ranks.single().valueMilliseconds ?: -1.0, 0.0)
+        assertEquals(1, ranks.single().sampleCount)
+    }
+
     private fun host(
         id: String,
         name: String,
@@ -109,5 +185,21 @@ class ComparisonPresentationTest {
         sshReadyMs = ready,
         fullProbeMs = probe,
         isPinned = pinned,
+    )
+
+    private fun metric(
+        hostId: String,
+        capturedAt: String,
+        state: String,
+        ping: Double? = null,
+        ready: Double? = null,
+        probe: Double? = null,
+    ) = HostMetric(
+        hostId = hostId,
+        capturedAt = Instant.parse(capturedAt),
+        state = state,
+        pingMs = ping,
+        sshReadyMs = ready,
+        fullProbeMs = probe,
     )
 }

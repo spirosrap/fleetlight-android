@@ -102,8 +102,10 @@
       "windowHours": 6,
       "currentAverageMs": 74,
       "currentSampleCount": 12,
+      "currentCoverageSeconds": 16200,
       "previousAverageMs": 81,
-      "previousSampleCount": 12
+      "previousSampleCount": 12,
+      "previousCoverageSeconds": 14400
     }
   ],
   "metrics": [

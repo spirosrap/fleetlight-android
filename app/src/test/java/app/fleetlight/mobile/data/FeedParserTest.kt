@@ -39,8 +39,10 @@ class FeedParserTest {
         assertEquals(6, comparison.windowHours)
         assertEquals(74.0, comparison.currentAverageMs ?: -1.0, 0.0)
         assertEquals(12, comparison.currentSampleCount)
+        assertEquals(16_200.0, comparison.currentCoverageSeconds ?: -1.0, 0.0)
         assertEquals(81.0, comparison.previousAverageMs ?: -1.0, 0.0)
         assertEquals(12, comparison.previousSampleCount)
+        assertEquals(14_400.0, comparison.previousCoverageSeconds ?: -1.0, 0.0)
     }
 
     @Test
@@ -71,6 +73,9 @@ class FeedParserTest {
               "generatedAt": "2026-01-01T00:00:00Z",
               "timingComparisons": [
                 {"hostId":"alpha","metric":"ping","windowHours":1,"currentAverageMs":12,"currentSampleCount":-2},
+                {"hostId":"alpha","metric":"ping","windowHours":1,"currentAverageMs":12,"currentSampleCount":2,"currentCoverageSeconds":-1},
+                {"hostId":"alpha","metric":"ping","windowHours":1,"currentAverageMs":12,"currentSampleCount":2,"previousCoverageSeconds":"wide"},
+                {"hostId":"alpha","metric":"ping","windowHours":1,"currentAverageMs":12,"currentSampleCount":0},
                 {"hostId":"alpha","metric":"futureMetric","windowHours":1},
                 {"hostId":"alpha","metric":"checks","windowHours":0},
                 {"metric":"ping","windowHours":1}
@@ -79,6 +84,31 @@ class FeedParserTest {
         )
 
         assertTrue(feed.timingComparisons.isEmpty())
+    }
+
+    @Test
+    fun keepsLegacyTimingComparisonsWithoutCoverageAsUnknown() {
+        val feed = parser.parse(
+            """{
+              "schemaVersion": 1,
+              "generatedAt": "2026-01-01T00:00:00Z",
+              "timingComparisons": [{
+                "hostId":"alpha",
+                "metric":"ping",
+                "windowHours":1,
+                "currentAverageMs":12,
+                "currentSampleCount":4,
+                "previousAverageMs":14,
+                "previousSampleCount":4
+              }]
+            }""",
+        )
+
+        val comparison = feed.timingComparisons.single()
+        assertEquals(12.0, comparison.currentAverageMs ?: -1.0, 0.0)
+        assertEquals(14.0, comparison.previousAverageMs ?: -1.0, 0.0)
+        assertEquals(null, comparison.currentCoverageSeconds)
+        assertEquals(null, comparison.previousCoverageSeconds)
     }
 
     @Test

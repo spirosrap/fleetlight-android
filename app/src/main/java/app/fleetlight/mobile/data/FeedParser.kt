@@ -4,6 +4,7 @@ import java.time.Instant
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -172,22 +173,55 @@ class FeedParser(
             ?.takeIf(SUPPORTED_TIMING_COMPARISON_METRICS::contains)
             ?: return null
         val windowHours = value.int("windowHours")?.takeIf { it > 0 } ?: return null
-        val currentSampleCount = value.int("currentSampleCount") ?: 0
-        val previousSampleCount = value.int("previousSampleCount") ?: 0
-        if (currentSampleCount < 0 || previousSampleCount < 0) return null
+        val currentSampleCount = value.optionalNonnegativeInt("currentSampleCount") ?: return null
+        val previousSampleCount = value.optionalNonnegativeInt("previousSampleCount") ?: return null
+        val currentAverage = value.optionalVerifiedTiming("currentAverageMs") ?: return null
+        val previousAverage = value.optionalVerifiedTiming("previousAverageMs") ?: return null
+        val currentCoverage = value.optionalVerifiedCoverage("currentCoverageSeconds") ?: return null
+        val previousCoverage = value.optionalVerifiedCoverage("previousCoverageSeconds") ?: return null
+        if (!coherentAggregatePeriod(currentAverage.value, currentSampleCount.value)) return null
+        if (!coherentAggregatePeriod(previousAverage.value, previousSampleCount.value)) return null
         return TimingComparison(
             hostId = hostId,
             metric = metric,
             windowHours = windowHours,
-            currentAverageMs = value.double("currentAverageMs"),
-            currentSampleCount = currentSampleCount,
-            previousAverageMs = value.double("previousAverageMs"),
-            previousSampleCount = previousSampleCount,
+            currentAverageMs = currentAverage.value,
+            currentSampleCount = currentSampleCount.value,
+            currentCoverageSeconds = currentCoverage.value,
+            previousAverageMs = previousAverage.value,
+            previousSampleCount = previousSampleCount.value,
+            previousCoverageSeconds = previousCoverage.value,
         )
     }
 }
 
 private val SUPPORTED_TIMING_COMPARISON_METRICS = setOf("ping", "sshReady", "checks", "fullProbe")
+
+private data class OptionalNumber(val value: Double?)
+private data class OptionalCount(val value: Int)
+
+private fun JsonObject.optionalVerifiedTiming(key: String): OptionalNumber? = optionalVerifiedNumber(key)
+private fun JsonObject.optionalVerifiedCoverage(key: String): OptionalNumber? = optionalVerifiedNumber(key)
+
+private fun JsonObject.optionalVerifiedNumber(key: String): OptionalNumber? {
+    val element = this[key] ?: return OptionalNumber(null)
+    if (element is JsonNull) return OptionalNumber(null)
+    val value = (element as? JsonPrimitive)?.doubleOrNull ?: return null
+    return value.takeIf { it.isFinite() && it >= 0.0 }?.let(::OptionalNumber)
+}
+
+private fun JsonObject.optionalNonnegativeInt(key: String): OptionalCount? {
+    val element = this[key] ?: return OptionalCount(0)
+    if (element is JsonNull) return OptionalCount(0)
+    val value = (element as? JsonPrimitive)?.intOrNull ?: return null
+    return value.takeIf { it >= 0 }?.let(::OptionalCount)
+}
+
+private fun coherentAggregatePeriod(average: Double?, count: Int): Boolean = when {
+    count == 0 -> average == null
+    count > 0 -> average?.let { it.isFinite() && it >= 0.0 } == true
+    else -> false
+}
 
 private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
 private fun JsonObject.array(key: String): JsonArray = this[key] as? JsonArray ?: JsonArray(emptyList())

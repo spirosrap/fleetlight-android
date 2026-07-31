@@ -929,6 +929,18 @@ private fun ComparisonSummaryCard(
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
+                Text(
+                    "Evidence · Strong ${summary.strongEvidenceCount} · Fair ${summary.fairEvidenceCount} · " +
+                        "Limited ${summary.limitedEvidenceCount} · Unpaired ${summary.unpairedCount}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Coverage is the time span from the first to last valid sample, not sample density.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 summary.biggestImprovement?.let { mover ->
                     ComparisonMoverCallout(
                         label = "Biggest improvement",
@@ -985,7 +997,7 @@ private fun ComparisonMoverCallout(
             val percent = it.deltaPercent?.let { change -> "${formatDecimal(kotlin.math.abs(change))}% $direction · " }.orEmpty()
             "${it.hostName} · $percent${formatComparisonDuration(kotlin.math.abs(it.deltaMilliseconds))}"
         }
-        movement + if (it.hasLimitedEvidence) " · limited evidence" else ""
+        movement + if (it.hasLimitedEvidence) " · Limited evidence" else ""
     }
     Surface(
         color = color.copy(alpha = 0.10f),
@@ -1094,17 +1106,53 @@ private fun ComparisonRankCard(
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
                 )
             }
-            if (window != FleetComparisonWindow.NOW && rank.direction != FleetComparisonDirection.NO_BASELINE) {
-                ComparisonDirectionBadge(rank)
+            if (window != FleetComparisonWindow.NOW) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (rank.direction != FleetComparisonDirection.NO_BASELINE) {
+                        ComparisonDirectionBadge(rank)
+                    }
+                    ComparisonEvidenceBadge(rank.evidenceStrength)
+                }
             }
             Text(
                 comparisonDetail(rank, metric, window),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+                maxLines = if (window == FleetComparisonWindow.NOW) 2 else 3,
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+@Composable
+private fun ComparisonEvidenceBadge(strength: FleetComparisonEvidenceStrength) {
+    val label = when (strength) {
+        FleetComparisonEvidenceStrength.STRONG -> "Strong evidence"
+        FleetComparisonEvidenceStrength.FAIR -> "Fair evidence"
+        FleetComparisonEvidenceStrength.LIMITED -> "Limited evidence"
+        FleetComparisonEvidenceStrength.NONE -> "Unpaired"
+    }
+    val color = when (strength) {
+        FleetComparisonEvidenceStrength.STRONG -> MaterialTheme.colorScheme.primary
+        FleetComparisonEvidenceStrength.FAIR -> MaterialTheme.colorScheme.tertiary
+        FleetComparisonEvidenceStrength.LIMITED -> MaterialTheme.colorScheme.error
+        FleetComparisonEvidenceStrength.NONE -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(
+        color = color.copy(alpha = 0.12f),
+        contentColor = color,
+        shape = RoundedCornerShape(999.dp),
+    ) {
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
@@ -1172,27 +1220,23 @@ private fun comparisonDetail(
     if (rank.isObserver) return "Local process timing is not comparable with remote SSH machines"
     rank.sampleCount?.let { count ->
         val previousCount = rank.previousSampleCount ?: 0
-        if (count == 0) {
-            return rank.previousValueMilliseconds?.let { previous ->
-                "No current ${window.label} history · previous ${formatComparisonDuration(previous)} ($previousCount samples)"
-            } ?: "No current or previous verified ${metric.label.lowercase()} history"
-        }
-        val current = checkNotNull(rank.valueMilliseconds)
-        val previous = rank.previousValueMilliseconds?.let {
-            "previous ${formatComparisonDuration(it)} ($previousCount samples)"
-        } ?: "no previous baseline"
+        val current = rank.valueMilliseconds?.let(::formatComparisonDuration) ?: "no data"
+        val previous = rank.previousValueMilliseconds?.let(::formatComparisonDuration) ?: "no data"
+        val currentCoverage = comparisonCoverageLabel(rank.currentCoverageSeconds, rank.comparisonWindowSeconds)
+        val previousCoverage = comparisonCoverageLabel(rank.previousCoverageSeconds, rank.comparisonWindowSeconds)
         val currentState = if (rank.host.state.isLiveForComparison()) {
             null
         } else {
             "currently ${rank.host.status.lowercase()}"
         }
-        return listOf(
-            "Current ${formatComparisonDuration(current)} ($count samples)",
-            previous,
+        val currentLine = "Current $current · ${comparisonSampleLabel(count)} · $currentCoverage"
+        val previousLine = listOfNotNull(
+            "Previous $previous",
+            comparisonSampleLabel(previousCount),
+            previousCoverage,
             currentState,
-        )
-            .filterNotNull()
-            .joinToString(" · ")
+        ).joinToString(" · ")
+        return "$currentLine\n$previousLine"
     }
     if (!rank.host.state.isLiveForComparison()) return rank.host.detail ?: rank.host.status.replaceFirstChar(Char::uppercase)
     return when (metric) {
@@ -1208,6 +1252,16 @@ private fun comparisonDetail(
             FleetComparisonMetric.CHECKS.value(rank.host)?.let { "checks ${formatComparisonDuration(it)}" },
         ).joinToString(" + ").ifBlank { "Complete remote probe time" }
     }
+}
+
+private fun comparisonSampleLabel(count: Int): String = "$count sample${if (count == 1) "" else "s"}"
+
+private fun comparisonCoverageLabel(coverageSeconds: Double?, windowSeconds: Double?): String {
+    val window = windowSeconds?.takeIf { it.isFinite() && it > 0.0 } ?: return "coverage unknown"
+    val coverage = coverageSeconds?.takeIf { it.isFinite() && it >= 0.0 } ?: return "coverage unknown"
+    // Floor the displayed value so 24.99% never looks like it meets the 25% tier boundary.
+    val percent = (coverage.coerceAtMost(window) / window * 100.0).toInt()
+    return "$percent% coverage"
 }
 
 private fun formatComparisonDuration(milliseconds: Double): String = when {

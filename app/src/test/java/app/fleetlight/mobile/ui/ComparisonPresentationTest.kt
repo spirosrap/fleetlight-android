@@ -198,6 +198,9 @@ class ComparisonPresentationTest {
         assertEquals(-30.0, rank.deltaMilliseconds ?: 1.0, 0.0)
         assertEquals(-60.0, rank.deltaPercent ?: 1.0, 0.0)
         assertEquals(FleetComparisonDirection.FASTER, rank.direction)
+        assertEquals(3_600.0, rank.currentCoverageSeconds ?: -1.0, 0.0)
+        assertEquals(1_800.0, rank.previousCoverageSeconds ?: -1.0, 0.0)
+        assertEquals(FleetComparisonEvidenceStrength.FAIR, rank.evidenceStrength)
     }
 
     @Test
@@ -218,6 +221,7 @@ class ComparisonPresentationTest {
 
         assertEquals(30.0, ranks.single().valueMilliseconds ?: -1.0, 0.0)
         assertEquals(1, ranks.single().sampleCount)
+        assertEquals(0.0, ranks.single().currentCoverageSeconds ?: -1.0, 0.0)
         assertNull(ranks.single().previousValueMilliseconds)
     }
 
@@ -253,6 +257,7 @@ class ComparisonPresentationTest {
         assertEquals(3, rank.previousSampleCount)
         assertEquals(FleetComparisonDirection.FASTER, rank.direction)
         assertEquals(FleetComparisonEvidenceSource.CONTROLLER, rank.evidenceSource)
+        assertEquals(FleetComparisonEvidenceStrength.LIMITED, rank.evidenceStrength)
         assertEquals(HostState.OFFLINE, rank.host.state)
     }
 
@@ -274,9 +279,11 @@ class ComparisonPresentationTest {
                     metric = "ping",
                     windowHours = 1,
                     currentAverageMs = 999.0,
-                    currentSampleCount = 0,
+                    currentSampleCount = 2,
+                    currentCoverageSeconds = -1.0,
                     previousAverageMs = 50.0,
-                    previousSampleCount = 1,
+                    previousSampleCount = 2,
+                    previousCoverageSeconds = 1_800.0,
                 ),
             ),
         )
@@ -286,6 +293,130 @@ class ComparisonPresentationTest {
         assertEquals(50.0, rank.previousValueMilliseconds ?: -1.0, 0.0)
         assertEquals(FleetComparisonDirection.FASTER, rank.direction)
         assertEquals(FleetComparisonEvidenceSource.RAW_HISTORY, rank.evidenceSource)
+    }
+
+    @Test
+    fun evidenceStrengthUsesExactCountAndCoverageThresholds() {
+        fun strength(
+            count: Int = 4,
+            currentCoverage: Double? = 3_600.0,
+            previousCoverage: Double? = 3_600.0,
+            current: Double? = 40.0,
+            previous: Double? = 50.0,
+        ) = comparisonEvidenceStrength(
+            currentMilliseconds = current,
+            currentSampleCount = count,
+            currentCoverageSeconds = currentCoverage,
+            previousMilliseconds = previous,
+            previousSampleCount = count,
+            previousCoverageSeconds = previousCoverage,
+            windowSeconds = 3_600.0,
+        )
+
+        assertEquals(FleetComparisonEvidenceStrength.NONE, strength(previous = null))
+        assertEquals(FleetComparisonEvidenceStrength.LIMITED, strength(count = 1))
+        assertEquals(FleetComparisonEvidenceStrength.LIMITED, strength(currentCoverage = null))
+        assertEquals(FleetComparisonEvidenceStrength.LIMITED, strength(currentCoverage = 899.9))
+        assertEquals(FleetComparisonEvidenceStrength.FAIR, strength(currentCoverage = 900.0))
+        assertEquals(FleetComparisonEvidenceStrength.FAIR, strength(count = 3))
+        assertEquals(FleetComparisonEvidenceStrength.FAIR, strength(currentCoverage = 2_339.9))
+        assertEquals(FleetComparisonEvidenceStrength.STRONG, strength(currentCoverage = 2_340.0))
+    }
+
+    @Test
+    fun extremeFiniteInputsNeverProduceInfiniteDerivedEvidenceOrOverflowTotals() {
+        val extreme = FleetComparisonRank(
+            host = host("extreme", "Extreme"),
+            valueMilliseconds = Double.MAX_VALUE,
+            isObserver = false,
+            sampleCount = Int.MAX_VALUE,
+            currentCoverageSeconds = 3_600.0,
+            previousValueMilliseconds = Double.MIN_VALUE,
+            previousSampleCount = Int.MAX_VALUE,
+            previousCoverageSeconds = 3_600.0,
+            comparisonWindowSeconds = 3_600.0,
+            direction = comparisonDirection(Double.MAX_VALUE, Double.MIN_VALUE),
+        )
+        val second = extreme.copy(host = host("second", "Second"))
+
+        assertTrue(extreme.deltaMilliseconds?.isFinite() == true)
+        assertNull(extreme.deltaPercent)
+        assertEquals(FleetComparisonDirection.SLOWER, extreme.direction)
+        assertTrue(extreme.isPairedPeriodComparison)
+        val summary = fleetComparisonSummary(listOf(extreme, second))
+        assertTrue(summary.medianMilliseconds?.isFinite() == true)
+        assertEquals(Double.MAX_VALUE, summary.medianMilliseconds ?: -1.0, 0.0)
+        assertEquals(2, summary.comparableCount)
+        assertEquals(2, summary.slowerCount)
+        assertEquals(Int.MAX_VALUE, summary.currentSampleCount)
+        assertEquals(Int.MAX_VALUE, summary.previousSampleCount)
+    }
+
+    @Test
+    fun rawAveragesRemainFiniteWhenValidSamplesAreNearDoubleMaximum() {
+        val rank = historicalFleetComparisonRanks(
+            hosts = listOf(host("alpha", "Alpha")),
+            observerId = "observer",
+            metrics = listOf(
+                metric("alpha", "2026-01-15T10:00:00Z", "online", ping = Double.MAX_VALUE),
+                metric("alpha", "2026-01-15T10:30:00Z", "online", ping = Double.MAX_VALUE),
+                metric("alpha", "2026-01-15T11:00:00Z", "online", ping = Double.MAX_VALUE),
+                metric("alpha", "2026-01-15T12:00:00Z", "online", ping = Double.MAX_VALUE),
+            ),
+            endAt = Instant.parse("2026-01-15T12:00:00Z"),
+            window = FleetComparisonWindow.ONE_HOUR,
+            metric = FleetComparisonMetric.PING,
+        ).single()
+
+        assertEquals(Double.MAX_VALUE, rank.valueMilliseconds ?: -1.0, 0.0)
+        assertEquals(Double.MAX_VALUE, rank.previousValueMilliseconds ?: -1.0, 0.0)
+        assertTrue(rank.valueMilliseconds?.isFinite() == true)
+        assertEquals(FleetComparisonDirection.STABLE, rank.direction)
+    }
+
+    @Test
+    fun controllerCoverageIsClampedAndSingleSampleCoverageNormalizesToZero() {
+        val ranks = historicalFleetComparisonRanks(
+            hosts = listOf(host("strong", "Strong"), host("single", "Single")),
+            observerId = "observer",
+            metrics = emptyList(),
+            endAt = Instant.parse("2026-01-15T12:00:00Z"),
+            window = FleetComparisonWindow.ONE_HOUR,
+            metric = FleetComparisonMetric.PING,
+            timingComparisons = listOf(
+                TimingComparison(
+                    hostId = "strong",
+                    metric = "ping",
+                    windowHours = 1,
+                    currentAverageMs = 40.0,
+                    currentSampleCount = 4,
+                    currentCoverageSeconds = 9_000.0,
+                    previousAverageMs = 50.0,
+                    previousSampleCount = 4,
+                    previousCoverageSeconds = 7_200.0,
+                ),
+                TimingComparison(
+                    hostId = "single",
+                    metric = "ping",
+                    windowHours = 1,
+                    currentAverageMs = 40.0,
+                    currentSampleCount = 1,
+                    currentCoverageSeconds = 3_000.0,
+                    previousAverageMs = 50.0,
+                    previousSampleCount = 1,
+                    previousCoverageSeconds = 3_000.0,
+                ),
+            ),
+        )
+
+        val strong = ranks.first { it.host.id == "strong" }
+        assertEquals(3_600.0, strong.currentCoverageSeconds ?: -1.0, 0.0)
+        assertEquals(3_600.0, strong.previousCoverageSeconds ?: -1.0, 0.0)
+        assertEquals(FleetComparisonEvidenceStrength.STRONG, strong.evidenceStrength)
+        val single = ranks.first { it.host.id == "single" }
+        assertEquals(0.0, single.currentCoverageSeconds ?: -1.0, 0.0)
+        assertEquals(0.0, single.previousCoverageSeconds ?: -1.0, 0.0)
+        assertEquals(FleetComparisonEvidenceStrength.LIMITED, single.evidenceStrength)
     }
 
     @Test
@@ -565,6 +696,48 @@ class ComparisonPresentationTest {
         )
         assertTrue(unknown.rawHistoryCoverageUnknown)
         assertFalse(unknown.rawHistoryCoverageInsufficient)
+    }
+
+    @Test
+    fun summaryCountsStrongFairLimitedAndUnpairedEvidence() {
+        fun evidenceRank(
+            id: String,
+            count: Int,
+            coverageSeconds: Double?,
+            previous: Double? = 50.0,
+        ) = FleetComparisonRank(
+            host = host(id, id),
+            valueMilliseconds = 40.0,
+            isObserver = false,
+            sampleCount = count,
+            currentCoverageSeconds = coverageSeconds,
+            previousValueMilliseconds = previous,
+            previousSampleCount = if (previous == null) 0 else count,
+            previousCoverageSeconds = coverageSeconds,
+            comparisonWindowSeconds = 3_600.0,
+            direction = comparisonDirection(40.0, previous),
+            evidenceSource = FleetComparisonEvidenceSource.CONTROLLER,
+        )
+        val ranks = listOf(
+            evidenceRank("strong", count = 4, coverageSeconds = 2_340.0),
+            evidenceRank("fair", count = 3, coverageSeconds = 3_600.0),
+            evidenceRank("limited", count = 4, coverageSeconds = null, previous = 100.0),
+            evidenceRank("unpaired", count = 4, coverageSeconds = 3_600.0, previous = null),
+            FleetComparisonRank(
+                host = host("observer", "Observer"),
+                valueMilliseconds = null,
+                isObserver = true,
+            ),
+        )
+
+        val summary = fleetComparisonSummary(ranks)
+
+        assertEquals(1, summary.strongEvidenceCount)
+        assertEquals(1, summary.fairEvidenceCount)
+        assertEquals(1, summary.limitedEvidenceCount)
+        assertEquals(1, summary.unpairedCount)
+        assertEquals(3, summary.comparableCount)
+        assertTrue(summary.biggestImprovement?.hasLimitedEvidence == true)
     }
 
     private fun host(

@@ -147,8 +147,10 @@ data class TimingComparison(
     val windowHours: Int,
     val currentAverageMs: Double? = null,
     val currentSampleCount: Int = 0,
+    val currentCoverageSeconds: Double? = null,
     val previousAverageMs: Double? = null,
     val previousSampleCount: Int = 0,
+    val previousCoverageSeconds: Double? = null,
 )
 
 fun MobileFeed.withDerivedSummary(): MobileFeed {

@@ -25,7 +25,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - `fleetlight://configure` endpoint links without compiling private addresses into the app
 - Optional stable release signing from an ignored properties file or environment variables
 
-- Version: **1.11.0 (16)**
+- Version: **1.12.0 (17)**
 - Application ID: `app.fleetlight.mobile`
 - Minimum Android: 8.0 / API 26
 - Compile and target SDK: 36
@@ -76,8 +76,10 @@ The app accepts lower-camel-case JSON with these top-level fields:
       "windowHours": 6,
       "currentAverageMs": 24,
       "currentSampleCount": 12,
+      "currentCoverageSeconds": 16200,
       "previousAverageMs": 31,
-      "previousSampleCount": 12
+      "previousSampleCount": 12,
+      "previousCoverageSeconds": 14400
     }
   ],
   "metrics": []
@@ -86,7 +88,9 @@ The app accepts lower-camel-case JSON with these top-level fields:
 
 `schemaVersion` and a valid ISO-8601 `generatedAt` are required. `metricsWindowHours` reports how much history the observer intends to publish, and `metricsSampleIntervalSeconds` reports the effective cadence of the published, potentially downsampled series. Trends uses both with the samples' real timestamps to measure coverage, report freshness, and avoid drawing through missing intervals.
 
-`timingComparisons` is optional. Each entry identifies one host, one metric (`ping`, `sshReady`, `checks`, or `fullProbe`), and a `windowHours` value. It carries the controller's verified average and sample count for the selected interval ending at `generatedAt`, plus the immediately previous equal interval. Insights prefers coherent controller aggregates because a chart-oriented sample series may be downsampled; malformed average/count pairs fall back to raw history. With older feeds, it falls back to `metrics`, treats a later duplicate host/timestamp as a correction, and uses non-overlapping current `[end-window, end]` and previous `[end-2window, end-window)` intervals. Values must be finite and nonnegative; Checks also requires full-probe time to be at least SSH-ready time. Raw fallbacks visibly warn when declared history is short or unknown.
+`timingComparisons` is optional. Each entry identifies one host, one metric (`ping`, `sshReady`, `checks`, or `fullProbe`), and a `windowHours` value. It carries the controller's verified average, sample count, and optional timestamp coverage in seconds for the selected interval ending at `generatedAt`, plus the immediately previous equal interval. Insights prefers coherent controller aggregates because a chart-oriented sample series may be downsampled; malformed average/count/coverage pairs fall back to raw history. Older aggregates without coverage remain compatible, but are visibly classified as Limited evidence rather than Strong.
+
+Historical comparisons classify paired evidence as **Limited**, **Fair**, or **Strong**. Both periods need a valid average and positive sample count. Either period having fewer than two samples, unknown coverage, or less than 25% coverage is Limited; fewer than four samples or less than 65% coverage is Fair; otherwise it is Strong. Missing period pairs are Unpaired. With older feeds lacking controller aggregates, Insights falls back to `metrics`, treats a later duplicate host/timestamp as a correction, and uses non-overlapping current `[end-window, end]` and previous `[end-2window, end-window)` intervals. Raw coverage spans the earliest to latest canonical valid online sample in each period, is zero below two samples, and is clamped to the period length. Values and coverage must be finite and nonnegative; Checks also requires full-probe time to be at least SSH-ready time. Raw fallbacks visibly warn when declared history is short or unknown.
 
 Hosts may set `isPinned: true`; pinned hosts appear first and retain issue-first ordering within the pinned group. Feeds dated more than five minutes in the future are rejected so a misconfigured or untrusted observer cannot indefinitely outrank healthy sources. Incidents are immutable event-log entries rather than active/resolved records. Unknown fields are ignored and optional fields default safely. See [`fixtures/demo-feed.json`](fixtures/demo-feed.json) for a complete generic example.
 

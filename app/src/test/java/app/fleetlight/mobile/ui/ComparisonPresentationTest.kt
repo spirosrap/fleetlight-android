@@ -3,6 +3,7 @@ package app.fleetlight.mobile.ui
 import app.fleetlight.mobile.data.FleetHost
 import app.fleetlight.mobile.data.HostMetric
 import app.fleetlight.mobile.data.HostState
+import app.fleetlight.mobile.data.TimingComparison
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -108,8 +109,8 @@ class ComparisonPresentationTest {
             metric("offline", "2026-01-15T11:10:00Z", "online", ping = 10.0),
             metric("offline", "2026-01-15T11:20:00Z", "online", ping = 10.0),
             metric("steady", "2026-01-15T11:15:00Z", "unreachable", ping = 1.0),
-            metric("steady", "2026-01-15T11:15:00Z", "online", ping = 20.0),
             metric("steady", "2026-01-15T11:15:00Z", "online", ping = 999.0),
+            metric("steady", "2026-01-15T11:15:00Z", "online", ping = 20.0),
             metric("steady", "2026-01-15T11:45:00Z", "unreachable", ping = 1.0),
             metric("steady", "2026-01-15T11:35:00Z", "attention", ping = 2.0),
             metric("steady", "2026-01-15T11:40:00Z", "online", ping = -5.0),
@@ -167,6 +168,217 @@ class ComparisonPresentationTest {
 
         assertEquals(150.0, ranks.single().valueMilliseconds ?: -1.0, 0.0)
         assertEquals(1, ranks.single().sampleCount)
+    }
+
+    @Test
+    fun comparesDisjointCurrentAndPreviousWindowsWithTheBoundaryInCurrent() {
+        val endAt = Instant.parse("2026-01-15T12:00:00Z")
+        val ranks = historicalFleetComparisonRanks(
+            hosts = listOf(host("alpha", "Alpha")),
+            observerId = "observer",
+            metrics = listOf(
+                metric("alpha", "2026-01-15T09:59:59Z", "online", ping = 1.0),
+                metric("alpha", "2026-01-15T10:00:00Z", "online", ping = 60.0),
+                metric("alpha", "2026-01-15T10:30:00Z", "online", ping = 40.0),
+                metric("alpha", "2026-01-15T11:00:00Z", "online", ping = 30.0),
+                metric("alpha", "2026-01-15T11:30:00Z", "online", ping = 20.0),
+                metric("alpha", "2026-01-15T12:00:00Z", "online", ping = 10.0),
+                metric("alpha", "2026-01-15T12:00:01Z", "online", ping = 1.0),
+            ),
+            endAt = endAt,
+            window = FleetComparisonWindow.ONE_HOUR,
+            metric = FleetComparisonMetric.PING,
+        )
+
+        val rank = ranks.single()
+        assertEquals(20.0, rank.valueMilliseconds ?: -1.0, 0.0)
+        assertEquals(3, rank.sampleCount)
+        assertEquals(50.0, rank.previousValueMilliseconds ?: -1.0, 0.0)
+        assertEquals(2, rank.previousSampleCount)
+        assertEquals(-30.0, rank.deltaMilliseconds ?: 1.0, 0.0)
+        assertEquals(-60.0, rank.deltaPercent ?: 1.0, 0.0)
+        assertEquals(FleetComparisonDirection.FASTER, rank.direction)
+    }
+
+    @Test
+    fun duplicateCorrectionsWinBeforeStateAndValueValidation() {
+        val ranks = historicalFleetComparisonRanks(
+            hosts = listOf(host("alpha", "Alpha")),
+            observerId = "observer",
+            metrics = listOf(
+                metric("alpha", "2026-01-15T11:15:00Z", "online", ping = 20.0),
+                metric("alpha", "2026-01-15T11:15:00Z", "unreachable", ping = 20.0),
+                metric("alpha", "2026-01-15T11:30:00Z", "unreachable", ping = 1.0),
+                metric("alpha", "2026-01-15T11:30:00Z", "online", ping = 30.0),
+            ),
+            endAt = Instant.parse("2026-01-15T12:00:00Z"),
+            window = FleetComparisonWindow.ONE_HOUR,
+            metric = FleetComparisonMetric.PING,
+        )
+
+        assertEquals(30.0, ranks.single().valueMilliseconds ?: -1.0, 0.0)
+        assertEquals(1, ranks.single().sampleCount)
+        assertNull(ranks.single().previousValueMilliseconds)
+    }
+
+    @Test
+    fun controllerAggregateWinsOverSampledHistoryAndKeepsEvidence() {
+        val ranks = historicalFleetComparisonRanks(
+            hosts = listOf(host("alpha", "Alpha", state = HostState.OFFLINE)),
+            observerId = "observer",
+            metrics = listOf(
+                metric("alpha", "2026-01-15T10:30:00Z", "online", ping = 999.0),
+                metric("alpha", "2026-01-15T11:30:00Z", "online", ping = 999.0),
+            ),
+            endAt = Instant.parse("2026-01-15T12:00:00Z"),
+            window = FleetComparisonWindow.ONE_HOUR,
+            metric = FleetComparisonMetric.PING,
+            timingComparisons = listOf(
+                TimingComparison(
+                    hostId = "alpha",
+                    metric = "ping",
+                    windowHours = 1,
+                    currentAverageMs = 40.0,
+                    currentSampleCount = 4,
+                    previousAverageMs = 50.0,
+                    previousSampleCount = 3,
+                ),
+            ),
+        )
+
+        val rank = ranks.single()
+        assertEquals(40.0, rank.valueMilliseconds ?: -1.0, 0.0)
+        assertEquals(4, rank.sampleCount)
+        assertEquals(50.0, rank.previousValueMilliseconds ?: -1.0, 0.0)
+        assertEquals(3, rank.previousSampleCount)
+        assertEquals(FleetComparisonDirection.FASTER, rank.direction)
+        assertEquals(FleetComparisonEvidenceSource.CONTROLLER, rank.evidenceSource)
+        assertEquals(HostState.OFFLINE, rank.host.state)
+    }
+
+    @Test
+    fun malformedControllerAggregateFallsBackToUsableRawHistory() {
+        val ranks = historicalFleetComparisonRanks(
+            hosts = listOf(host("alpha", "Alpha")),
+            observerId = "observer",
+            metrics = listOf(
+                metric("alpha", "2026-01-15T10:30:00Z", "online", ping = 50.0),
+                metric("alpha", "2026-01-15T11:30:00Z", "online", ping = 30.0),
+            ),
+            endAt = Instant.parse("2026-01-15T12:00:00Z"),
+            window = FleetComparisonWindow.ONE_HOUR,
+            metric = FleetComparisonMetric.PING,
+            timingComparisons = listOf(
+                TimingComparison(
+                    hostId = "alpha",
+                    metric = "ping",
+                    windowHours = 1,
+                    currentAverageMs = 999.0,
+                    currentSampleCount = 0,
+                    previousAverageMs = 50.0,
+                    previousSampleCount = 1,
+                ),
+            ),
+        )
+
+        val rank = ranks.single()
+        assertEquals(30.0, rank.valueMilliseconds ?: -1.0, 0.0)
+        assertEquals(50.0, rank.previousValueMilliseconds ?: -1.0, 0.0)
+        assertEquals(FleetComparisonDirection.FASTER, rank.direction)
+        assertEquals(FleetComparisonEvidenceSource.RAW_HISTORY, rank.evidenceSource)
+    }
+
+    @Test
+    fun keepsPreviousOnlyEvidenceWhenTheCurrentWindowIsEmpty() {
+        val ranks = historicalFleetComparisonRanks(
+            hosts = listOf(host("alpha", "Alpha")),
+            observerId = "observer",
+            metrics = listOf(
+                metric("alpha", "2026-01-15T10:30:00Z", "online", ping = 50.0),
+            ),
+            endAt = Instant.parse("2026-01-15T12:00:00Z"),
+            window = FleetComparisonWindow.ONE_HOUR,
+            metric = FleetComparisonMetric.PING,
+        )
+
+        val rank = ranks.single()
+        assertNull(rank.valueMilliseconds)
+        assertEquals(0, rank.sampleCount)
+        assertEquals(50.0, rank.previousValueMilliseconds ?: -1.0, 0.0)
+        assertEquals(1, rank.previousSampleCount)
+        assertEquals(FleetComparisonDirection.NO_BASELINE, rank.direction)
+    }
+
+    @Test
+    fun classifiesMaterialChangeAndAvoidsInfinitePercentages() {
+        assertEquals(FleetComparisonDirection.STABLE, comparisonDirection(104.0, 100.0))
+        assertEquals(FleetComparisonDirection.STABLE, comparisonDirection(105.0, 100.0))
+        assertEquals(FleetComparisonDirection.SLOWER, comparisonDirection(106.0, 100.0))
+        assertEquals(FleetComparisonDirection.FASTER, comparisonDirection(94.0, 100.0))
+        assertEquals(FleetComparisonDirection.STABLE, comparisonDirection(1.5, 0.0))
+        assertEquals(FleetComparisonDirection.SLOWER, comparisonDirection(5.0, 0.0))
+        assertEquals(FleetComparisonDirection.NO_BASELINE, comparisonDirection(5.0, null))
+
+        val rank = FleetComparisonRank(
+            host = host("zero", "Zero"),
+            valueMilliseconds = 5.0,
+            isObserver = false,
+            previousValueMilliseconds = 0.0,
+            direction = FleetComparisonDirection.SLOWER,
+        )
+        assertEquals(5.0, rank.deltaMilliseconds ?: -1.0, 0.0)
+        assertNull(rank.deltaPercent)
+    }
+
+    @Test
+    fun summaryCountsOnlyPairedRemoteComparisonsAndReportsSourceCoverage() {
+        fun rank(
+            id: String,
+            direction: FleetComparisonDirection,
+            source: FleetComparisonEvidenceSource = FleetComparisonEvidenceSource.CONTROLLER,
+            observer: Boolean = false,
+        ) = FleetComparisonRank(
+            host = host(id, id),
+            valueMilliseconds = if (direction == FleetComparisonDirection.NO_BASELINE) 40.0 else 20.0,
+            isObserver = observer,
+            sampleCount = if (observer) 0 else 2,
+            previousValueMilliseconds = if (direction == FleetComparisonDirection.NO_BASELINE) null else 30.0,
+            previousSampleCount = if (observer || direction == FleetComparisonDirection.NO_BASELINE) 0 else 3,
+            direction = direction,
+            evidenceSource = source,
+        )
+        val ranks = listOf(
+            rank("fast", FleetComparisonDirection.FASTER),
+            rank("stable", FleetComparisonDirection.STABLE),
+            rank("slow", FleetComparisonDirection.SLOWER, FleetComparisonEvidenceSource.RAW_HISTORY),
+            rank("missing", FleetComparisonDirection.NO_BASELINE),
+            rank("observer", FleetComparisonDirection.FASTER, observer = true),
+        )
+
+        val summary = fleetComparisonSummary(ranks)
+        assertEquals(3, summary.comparableCount)
+        assertEquals(1, summary.fasterCount)
+        assertEquals(1, summary.stableCount)
+        assertEquals(1, summary.slowerCount)
+        assertEquals(8, summary.currentSampleCount)
+        assertEquals(9, summary.previousSampleCount)
+
+        val partial = fleetComparisonSourceSummary(ranks, FleetComparisonWindow.TWENTY_FOUR_HOURS, 24)
+        assertEquals(3, partial.controllerHostCount)
+        assertEquals(1, partial.rawHistoryHostCount)
+        assertEquals(48, partial.requiredHistoryHours)
+        assertTrue(partial.rawHistoryCoverageInsufficient)
+        assertFalse(
+            fleetComparisonSourceSummary(ranks, FleetComparisonWindow.TWENTY_FOUR_HOURS, 48)
+                .rawHistoryCoverageInsufficient,
+        )
+        val unknown = fleetComparisonSourceSummary(
+            ranks,
+            FleetComparisonWindow.TWENTY_FOUR_HOURS,
+            null,
+        )
+        assertTrue(unknown.rawHistoryCoverageUnknown)
+        assertFalse(unknown.rawHistoryCoverageInsufficient)
     }
 
     private fun host(

@@ -13,6 +13,7 @@ data class MobileFeed(
     val linuxUpdates: List<LinuxUpdate>,
     val incidents: List<FleetIncident>,
     val metrics: List<HostMetric>,
+    val timingComparisons: List<TimingComparison> = emptyList(),
 )
 
 data class FeedObserver(
@@ -138,6 +139,16 @@ data class HostMetric(
     val diskPercent: Double? = null,
     val memoryPercent: Double? = null,
     val loadAverage: Double? = null,
+)
+
+data class TimingComparison(
+    val hostId: String,
+    val metric: String,
+    val windowHours: Int,
+    val currentAverageMs: Double? = null,
+    val currentSampleCount: Int = 0,
+    val previousAverageMs: Double? = null,
+    val previousSampleCount: Int = 0,
 )
 
 fun MobileFeed.withDerivedSummary(): MobileFeed {

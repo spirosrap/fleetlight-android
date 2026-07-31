@@ -44,6 +44,7 @@ class FeedParser(
             linuxUpdates = root.array("linuxUpdates").mapIndexedNotNull(::parseLinuxUpdate),
             incidents = root.array("incidents").mapIndexedNotNull(::parseIncident),
             metrics = root.array("metrics").mapIndexedNotNull(::parseMetric),
+            timingComparisons = root.array("timingComparisons").mapNotNull(::parseTimingComparison),
         ).withDerivedSummary()
     }
 
@@ -163,7 +164,30 @@ class FeedParser(
             loadAverage = value.double("loadAverage", "load", "load1"),
         )
     }
+
+    private fun parseTimingComparison(element: JsonElement): TimingComparison? {
+        val value = element as? JsonObject ?: return null
+        val hostId = value.string("hostId")?.takeIf(String::isNotBlank) ?: return null
+        val metric = value.string("metric")
+            ?.takeIf(SUPPORTED_TIMING_COMPARISON_METRICS::contains)
+            ?: return null
+        val windowHours = value.int("windowHours")?.takeIf { it > 0 } ?: return null
+        val currentSampleCount = value.int("currentSampleCount") ?: 0
+        val previousSampleCount = value.int("previousSampleCount") ?: 0
+        if (currentSampleCount < 0 || previousSampleCount < 0) return null
+        return TimingComparison(
+            hostId = hostId,
+            metric = metric,
+            windowHours = windowHours,
+            currentAverageMs = value.double("currentAverageMs"),
+            currentSampleCount = currentSampleCount,
+            previousAverageMs = value.double("previousAverageMs"),
+            previousSampleCount = previousSampleCount,
+        )
+    }
 }
+
+private val SUPPORTED_TIMING_COMPARISON_METRICS = setOf("ping", "sshReady", "checks", "fullProbe")
 
 private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
 private fun JsonObject.array(key: String): JsonArray = this[key] as? JsonArray ?: JsonArray(emptyList())

@@ -33,6 +33,14 @@ class FeedParserTest {
         assertEquals("running", workstation.services.single().state)
         assertTrue(feed.linuxUpdates.single().restartRequired)
         assertEquals("Machine went offline", feed.incidents.single().title)
+        val comparison = feed.timingComparisons.single()
+        assertEquals("media-server", comparison.hostId)
+        assertEquals("ping", comparison.metric)
+        assertEquals(6, comparison.windowHours)
+        assertEquals(74.0, comparison.currentAverageMs ?: -1.0, 0.0)
+        assertEquals(12, comparison.currentSampleCount)
+        assertEquals(81.0, comparison.previousAverageMs ?: -1.0, 0.0)
+        assertEquals(12, comparison.previousSampleCount)
     }
 
     @Test
@@ -52,6 +60,25 @@ class FeedParserTest {
         assertFalse(feed.hosts.single().isPinned)
         assertEquals(null, feed.metricsWindowHours)
         assertEquals(null, feed.metricsSampleIntervalSeconds)
+        assertTrue(feed.timingComparisons.isEmpty())
+    }
+
+    @Test
+    fun ignoresMalformedTimingComparisonsIncludingNegativeCounts() {
+        val feed = parser.parse(
+            """{
+              "schemaVersion": 1,
+              "generatedAt": "2026-01-01T00:00:00Z",
+              "timingComparisons": [
+                {"hostId":"alpha","metric":"ping","windowHours":1,"currentAverageMs":12,"currentSampleCount":-2},
+                {"hostId":"alpha","metric":"futureMetric","windowHours":1},
+                {"hostId":"alpha","metric":"checks","windowHours":0},
+                {"metric":"ping","windowHours":1}
+              ]
+            }""",
+        )
+
+        assertTrue(feed.timingComparisons.isEmpty())
     }
 
     @Test

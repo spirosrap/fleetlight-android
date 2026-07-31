@@ -16,6 +16,11 @@ internal enum class FleetComparisonWindow(val label: String, val hours: Int?) {
     TWENTY_FOUR_HOURS("24h", 24),
 }
 
+internal enum class FleetComparisonOrdering(val label: String) {
+    SPEED("Speed"),
+    CHANGE("Change"),
+}
+
 private fun Double?.verifiedTiming(): Double? = this?.takeIf { it.isFinite() && it >= 0.0 }
 
 private fun verifiedChecks(ready: Double?, total: Double?): Double? =
@@ -79,6 +84,13 @@ internal data class FleetComparisonRank(
         get() = previousValueMilliseconds
             ?.takeIf { it > 0.0 }
             ?.let { previous -> deltaMilliseconds?.times(100.0)?.div(previous) }
+
+    val isPairedPeriodComparison: Boolean
+        get() = !isObserver &&
+            valueMilliseconds?.let { it.isFinite() && it >= 0.0 } == true &&
+            previousValueMilliseconds?.let { it.isFinite() && it >= 0.0 } == true &&
+            (sampleCount ?: 0) > 0 &&
+            (previousSampleCount ?: 0) > 0
 }
 
 internal data class FleetComparisonSummary(
@@ -93,6 +105,17 @@ internal data class FleetComparisonSummary(
     val slowerCount: Int,
     val currentSampleCount: Int,
     val previousSampleCount: Int,
+    val biggestImprovement: FleetComparisonMover?,
+    val biggestSlowdown: FleetComparisonMover?,
+)
+
+internal data class FleetComparisonMover(
+    val hostId: String,
+    val hostName: String,
+    val deltaMilliseconds: Double,
+    val deltaPercent: Double?,
+    val isNewDelay: Boolean,
+    val hasLimitedEvidence: Boolean,
 )
 
 internal data class FleetComparisonSourceSummary(
@@ -149,6 +172,7 @@ internal fun historicalFleetComparisonRanks(
     window: FleetComparisonWindow,
     metric: FleetComparisonMetric,
     timingComparisons: List<TimingComparison> = emptyList(),
+    ordering: FleetComparisonOrdering = FleetComparisonOrdering.SPEED,
 ): List<FleetComparisonRank> {
     val hours = requireNotNull(window.hours) { "Historical comparison requires a time window" }
     val matchingControllerPairs = timingComparisons.asSequence()
@@ -184,7 +208,7 @@ internal fun historicalFleetComparisonRanks(
             },
             evidenceSource = source,
         )
-    }.sortedForComparison()
+    }.sortedForComparison(ordering)
 }
 
 private fun rawPeriodPairs(
@@ -277,27 +301,119 @@ private fun List<FleetComparisonRank>.sortedForComparison(): List<FleetCompariso
     ),
 )
 
+private fun List<FleetComparisonRank>.sortedForComparison(
+    ordering: FleetComparisonOrdering,
+): List<FleetComparisonRank> = when (ordering) {
+    FleetComparisonOrdering.SPEED -> sortedForComparison()
+    FleetComparisonOrdering.CHANGE -> sortedWith(
+        compareBy<FleetComparisonRank>(
+            { changeOrderingBucket(it) },
+            { it.deltaPercent ?: Double.MAX_VALUE },
+            { it.deltaMilliseconds ?: Double.MAX_VALUE },
+            { it.valueMilliseconds ?: Double.MAX_VALUE },
+            { it.host.name.lowercase() },
+            { it.host.id },
+        ),
+    )
+}
+
+private fun changeOrderingBucket(rank: FleetComparisonRank): Int = when {
+    rank.isObserver -> 6
+    rank.isPairedPeriodComparison && rank.direction == FleetComparisonDirection.FASTER -> 0
+    rank.isPairedPeriodComparison && rank.direction == FleetComparisonDirection.STABLE -> 1
+    rank.isPairedPeriodComparison && rank.direction == FleetComparisonDirection.SLOWER -> 2
+    rank.valueMilliseconds != null -> 3
+    rank.previousValueMilliseconds != null -> 4
+    else -> 5
+}
+
 internal fun fleetComparisonSummary(ranks: List<FleetComparisonRank>): FleetComparisonSummary {
-    val values = ranks.mapNotNull(FleetComparisonRank::valueMilliseconds).sorted()
+    val values = ranks.filterNot(FleetComparisonRank::isObserver)
+        .mapNotNull(FleetComparisonRank::valueMilliseconds)
+        .sorted()
     val median = when {
         values.isEmpty() -> null
         values.size % 2 == 1 -> values[values.size / 2]
         else -> (values[values.size / 2 - 1] + values[values.size / 2]) / 2.0
     }
+    val materialMovers = ranks.filter { rank ->
+        rank.isPairedPeriodComparison && rank.deltaMilliseconds?.isFinite() == true
+    }
+    val biggestImprovement = materialMovers
+        .filter { it.direction == FleetComparisonDirection.FASTER }
+        .minWithOrNull(materialImprovementComparator)
+        ?.toMover()
+    val slowdownCandidates = materialMovers.filter { it.direction == FleetComparisonDirection.SLOWER }
+    val biggestSlowdown = (
+        slowdownCandidates
+            .filter { it.deltaPercent?.isFinite() == true }
+            .minWithOrNull(materialSlowdownComparator)
+            ?: slowdownCandidates
+                .filter { it.previousValueMilliseconds == 0.0 }
+                .minWithOrNull(zeroBaselineSlowdownComparator)
+        )?.toMover()
     return FleetComparisonSummary(
         measuredCount = values.size,
         remoteCount = ranks.count { !it.isObserver },
         bestMilliseconds = values.firstOrNull(),
         medianMilliseconds = median,
         spreadMilliseconds = values.firstOrNull()?.let { best -> values.last() - best },
-        comparableCount = ranks.count {
-            !it.isObserver && it.direction != FleetComparisonDirection.NO_BASELINE
+        comparableCount = ranks.count(FleetComparisonRank::isPairedPeriodComparison),
+        fasterCount = ranks.count {
+            it.isPairedPeriodComparison && it.direction == FleetComparisonDirection.FASTER
         },
-        fasterCount = ranks.count { !it.isObserver && it.direction == FleetComparisonDirection.FASTER },
-        stableCount = ranks.count { !it.isObserver && it.direction == FleetComparisonDirection.STABLE },
-        slowerCount = ranks.count { !it.isObserver && it.direction == FleetComparisonDirection.SLOWER },
+        stableCount = ranks.count {
+            it.isPairedPeriodComparison && it.direction == FleetComparisonDirection.STABLE
+        },
+        slowerCount = ranks.count {
+            it.isPairedPeriodComparison && it.direction == FleetComparisonDirection.SLOWER
+        },
         currentSampleCount = ranks.filterNot(FleetComparisonRank::isObserver).sumOf { it.sampleCount ?: 0 },
         previousSampleCount = ranks.filterNot(FleetComparisonRank::isObserver).sumOf { it.previousSampleCount ?: 0 },
+        biggestImprovement = biggestImprovement,
+        biggestSlowdown = biggestSlowdown,
+    )
+}
+
+private val materialImprovementComparator = compareBy<FleetComparisonRank>(
+    { it.deltaPercent ?: Double.MAX_VALUE },
+    { it.deltaMilliseconds ?: Double.MAX_VALUE },
+    { it.valueMilliseconds ?: Double.MAX_VALUE },
+    { it.host.name.lowercase() },
+    { it.host.id },
+)
+
+private val materialSlowdownComparator = compareByDescending<FleetComparisonRank> {
+    it.deltaPercent ?: Double.MIN_VALUE
+}.thenByDescending {
+    it.deltaMilliseconds ?: Double.MIN_VALUE
+}.thenBy {
+    it.valueMilliseconds ?: Double.MAX_VALUE
+}.thenBy {
+    it.host.name.lowercase()
+}.thenBy {
+    it.host.id
+}
+
+private val zeroBaselineSlowdownComparator = compareByDescending<FleetComparisonRank> {
+    it.deltaMilliseconds ?: Double.MIN_VALUE
+}.thenBy {
+    it.valueMilliseconds ?: Double.MAX_VALUE
+}.thenBy {
+    it.host.name.lowercase()
+}.thenBy {
+    it.host.id
+}
+
+private fun FleetComparisonRank.toMover(): FleetComparisonMover? {
+    val delta = deltaMilliseconds ?: return null
+    return FleetComparisonMover(
+        hostId = host.id,
+        hostName = host.name,
+        deltaMilliseconds = delta,
+        deltaPercent = deltaPercent,
+        isNewDelay = previousValueMilliseconds == 0.0 && delta > 0.0,
+        hasLimitedEvidence = sampleCount == 1 || previousSampleCount == 1,
     )
 }
 

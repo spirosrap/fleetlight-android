@@ -73,6 +73,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -732,6 +733,17 @@ private fun ComparisonScreen(feed: MobileFeed?) {
 
     var selectedMetric by rememberSaveable { mutableStateOf(FleetComparisonMetric.PING) }
     var selectedWindow by rememberSaveable { mutableStateOf(FleetComparisonWindow.NOW) }
+    var selectedOrdering by rememberSaveable { mutableStateOf(FleetComparisonOrdering.SPEED) }
+    LaunchedEffect(selectedWindow) {
+        if (selectedWindow == FleetComparisonWindow.NOW) {
+            selectedOrdering = FleetComparisonOrdering.SPEED
+        }
+    }
+    val effectiveOrdering = if (selectedWindow == FleetComparisonWindow.NOW) {
+        FleetComparisonOrdering.SPEED
+    } else {
+        selectedOrdering
+    }
     val ranks = remember(
         feed.hosts,
         feed.metrics,
@@ -740,6 +752,7 @@ private fun ComparisonScreen(feed: MobileFeed?) {
         feed.observer.id,
         selectedMetric,
         selectedWindow,
+        effectiveOrdering,
     ) {
         if (selectedWindow == FleetComparisonWindow.NOW) {
             fleetComparisonRanks(feed.hosts, feed.observer.id, selectedMetric)
@@ -752,10 +765,18 @@ private fun ComparisonScreen(feed: MobileFeed?) {
                 window = selectedWindow,
                 metric = selectedMetric,
                 timingComparisons = feed.timingComparisons,
+                ordering = effectiveOrdering,
             )
         }
     }
     val measuredRanks = remember(ranks) { ranks.filter { it.valueMilliseconds != null } }
+    val positionedRanks = remember(ranks, effectiveOrdering) {
+        if (effectiveOrdering == FleetComparisonOrdering.CHANGE) {
+            ranks.filter(FleetComparisonRank::isPairedPeriodComparison)
+        } else {
+            measuredRanks
+        }
+    }
     val hasHistoricalEvidence = remember(ranks, selectedWindow) {
         selectedWindow != FleetComparisonWindow.NOW &&
             ranks.any { (it.previousSampleCount ?: 0) > 0 }
@@ -765,7 +786,12 @@ private fun ComparisonScreen(feed: MobileFeed?) {
         fleetComparisonSourceSummary(ranks, selectedWindow, feed.metricsWindowHours)
     }
     val maximumValue = measuredRanks.maxOfOrNull { it.valueMilliseconds ?: 0.0 }?.coerceAtLeast(1.0) ?: 1.0
-    val best = measuredRanks.firstOrNull()
+    val fastest = measuredRanks.minWithOrNull(
+        compareBy<FleetComparisonRank>(
+            { it.valueMilliseconds ?: Double.MAX_VALUE },
+            { it.host.id },
+        ),
+    )
 
     LazyColumn(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
@@ -776,8 +802,10 @@ private fun ComparisonScreen(feed: MobileFeed?) {
                 title = "Fleet comparison",
                 subtitle = if (selectedWindow == FleetComparisonWindow.NOW) {
                     "Current feed timings ranked fastest to slowest"
+                } else if (effectiveOrdering == FleetComparisonOrdering.CHANGE) {
+                    "Most improved to most regressed vs the previous ${selectedWindow.label}"
                 } else {
-                    "Verified ${selectedWindow.label} averages vs the previous ${selectedWindow.label}"
+                    "Verified ${selectedWindow.label} averages ranked fastest to slowest"
                 },
             )
         }
@@ -803,9 +831,30 @@ private fun ComparisonScreen(feed: MobileFeed?) {
                 }
             }
         }
+        if (selectedWindow != FleetComparisonWindow.NOW) {
+            item {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "Order",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FleetComparisonOrdering.entries.forEach { ordering ->
+                        FilterChip(
+                            selected = effectiveOrdering == ordering,
+                            onClick = { selectedOrdering = ordering },
+                            label = { Text(ordering.label) },
+                        )
+                    }
+                }
+            }
+        }
         item {
             ComparisonSummaryCard(
-                fastestName = best?.host?.name,
+                fastestName = fastest?.host?.name,
                 summary = summary,
                 observerExcluded = ranks.any(FleetComparisonRank::isObserver),
                 observerIdentityReported = feed.observer.id.isNotBlank(),
@@ -828,12 +877,13 @@ private fun ComparisonScreen(feed: MobileFeed?) {
                 ComparisonRankCard(
                     rank = rank,
                     metric = selectedMetric,
-                    position = measuredRanks.indexOfFirst { it.host.id == rank.host.id }
+                    position = positionedRanks.indexOfFirst { it.host.id == rank.host.id }
                         .takeIf { it >= 0 }
                         ?.plus(1),
                     bestMilliseconds = summary.bestMilliseconds,
                     maximumMilliseconds = maximumValue,
                     window = selectedWindow,
+                    ordering = effectiveOrdering,
                 )
             }
         }
@@ -879,6 +929,20 @@ private fun ComparisonSummaryCard(
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
+                summary.biggestImprovement?.let { mover ->
+                    ComparisonMoverCallout(
+                        label = "Biggest improvement",
+                        mover = mover,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                summary.biggestSlowdown?.let { mover ->
+                    ComparisonMoverCallout(
+                        label = "Biggest slowdown",
+                        mover = mover,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Text(
                     "Current ${summary.currentSampleCount} samples · previous ${summary.previousSampleCount} · " +
                         comparisonSourceLabel(sourceSummary) +
@@ -903,6 +967,35 @@ private fun ComparisonSummaryCard(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ComparisonMoverCallout(
+    label: String,
+    mover: FleetComparisonMover,
+    color: Color,
+) {
+    val value = mover.let {
+        val movement = if (it.isNewDelay) {
+            "${it.hostName} · new delay +${formatComparisonDuration(it.deltaMilliseconds)}"
+        } else {
+            val direction = if (it.deltaMilliseconds < 0.0) "faster" else "slower"
+            val percent = it.deltaPercent?.let { change -> "${formatDecimal(kotlin.math.abs(change))}% $direction · " }.orEmpty()
+            "${it.hostName} · $percent${formatComparisonDuration(kotlin.math.abs(it.deltaMilliseconds))}"
+        }
+        movement + if (it.hasLimitedEvidence) " · limited evidence" else ""
+    }
+    Surface(
+        color = color.copy(alpha = 0.10f),
+        contentColor = color,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+            Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -948,6 +1041,7 @@ private fun ComparisonRankCard(
     bestMilliseconds: Double?,
     maximumMilliseconds: Double,
     window: FleetComparisonWindow,
+    ordering: FleetComparisonOrdering,
 ) {
     val color = when (metric) {
         FleetComparisonMetric.PING -> MaterialTheme.colorScheme.secondary
@@ -966,10 +1060,16 @@ private fun ComparisonRankCard(
                     color = if (position == 1) color else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(rank.host.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                if (position == 1) {
+                val leaderLabel = when {
+                    position != 1 -> null
+                    ordering == FleetComparisonOrdering.SPEED -> "FASTEST"
+                    rank.direction == FleetComparisonDirection.FASTER -> "MOST IMPROVED"
+                    else -> null
+                }
+                if (leaderLabel != null) {
                     Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(999.dp)) {
                         Text(
-                            "FASTEST",
+                            leaderLabel,
                             modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                             style = MaterialTheme.typography.labelSmall,
                             color = color,
@@ -979,12 +1079,14 @@ private fun ComparisonRankCard(
                     Spacer(Modifier.width(8.dp))
                 }
                 Text(comparisonValueLabel(rank, window), fontWeight = FontWeight.Bold, color = comparisonRankColor(rank))
-                comparisonDelta(rank.valueMilliseconds, bestMilliseconds)?.let { delta ->
-                    Spacer(Modifier.width(6.dp))
-                    Text(delta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                comparisonDelta(rank.valueMilliseconds, bestMilliseconds)
+                    ?.takeIf { ordering == FleetComparisonOrdering.SPEED }
+                    ?.let { delta ->
+                        Spacer(Modifier.width(6.dp))
+                        Text(delta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
             }
-            rank.valueMilliseconds?.let { value ->
+            rank.valueMilliseconds?.takeIf { ordering == FleetComparisonOrdering.SPEED }?.let { value ->
                 LinearProgressIndicator(
                     progress = { (value / maximumMilliseconds).toFloat().coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth(),

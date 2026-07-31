@@ -315,7 +315,10 @@ class ComparisonPresentationTest {
         assertEquals(FleetComparisonDirection.STABLE, comparisonDirection(105.0, 100.0))
         assertEquals(FleetComparisonDirection.SLOWER, comparisonDirection(106.0, 100.0))
         assertEquals(FleetComparisonDirection.FASTER, comparisonDirection(94.0, 100.0))
+        assertEquals(FleetComparisonDirection.STABLE, comparisonDirection(0.0, 0.0))
         assertEquals(FleetComparisonDirection.STABLE, comparisonDirection(1.5, 0.0))
+        assertEquals(FleetComparisonDirection.STABLE, comparisonDirection(2.0, 0.0))
+        assertEquals(FleetComparisonDirection.SLOWER, comparisonDirection(3.0, 0.0))
         assertEquals(FleetComparisonDirection.SLOWER, comparisonDirection(5.0, 0.0))
         assertEquals(FleetComparisonDirection.NO_BASELINE, comparisonDirection(5.0, null))
 
@@ -328,6 +331,189 @@ class ComparisonPresentationTest {
         )
         assertEquals(5.0, rank.deltaMilliseconds ?: -1.0, 0.0)
         assertNull(rank.deltaPercent)
+    }
+
+    @Test
+    fun changeOrderingUsesSignedPercentThenSignedDeltaAndName() {
+        val ranks = historicalFleetComparisonRanks(
+            hosts = listOf(
+                host("slow", "Slow"),
+                host("stable-positive", "Stable positive"),
+                host("tie-z", "Zulu improvement"),
+                host("stable-negative", "Stable negative"),
+                host("tie-a", "Alpha improvement"),
+                host("largest-absolute", "Largest absolute"),
+            ),
+            observerId = "observer",
+            metrics = emptyList(),
+            endAt = Instant.parse("2026-01-15T12:00:00Z"),
+            window = FleetComparisonWindow.ONE_HOUR,
+            metric = FleetComparisonMetric.PING,
+            timingComparisons = listOf(
+                comparison("slow", current = 120.0, previous = 100.0),
+                comparison("stable-positive", current = 105.0, previous = 100.0),
+                comparison("tie-z", current = 50.0, previous = 100.0),
+                comparison("stable-negative", current = 95.0, previous = 100.0),
+                comparison("tie-a", current = 50.0, previous = 100.0),
+                comparison("largest-absolute", current = 100.0, previous = 200.0),
+            ),
+            ordering = FleetComparisonOrdering.CHANGE,
+        )
+
+        assertEquals(
+            listOf(
+                "largest-absolute",
+                "tie-a",
+                "tie-z",
+                "stable-negative",
+                "stable-positive",
+                "slow",
+            ),
+            ranks.map { it.host.id },
+        )
+        assertEquals(FleetComparisonDirection.FASTER, ranks.first().direction)
+        assertEquals(FleetComparisonDirection.STABLE, ranks[3].direction)
+        assertEquals(FleetComparisonDirection.SLOWER, ranks.last().direction)
+    }
+
+    @Test
+    fun changeOrderingKeepsNoPercentEvidenceAndObserverInTruthfulBuckets() {
+        val ranks = historicalFleetComparisonRanks(
+            hosts = listOf(
+                host("observer", "This phone"),
+                host("none", "No data"),
+                host("previous", "Previous only"),
+                host("zero", "Zero baseline"),
+                host("current", "Current only"),
+                host("paired", "Paired"),
+            ),
+            observerId = "observer",
+            metrics = emptyList(),
+            endAt = Instant.parse("2026-01-15T12:00:00Z"),
+            window = FleetComparisonWindow.ONE_HOUR,
+            metric = FleetComparisonMetric.PING,
+            timingComparisons = listOf(
+                comparison("observer", current = 1.0, previous = 2.0),
+                comparison("previous", current = null, previous = 20.0),
+                comparison("zero", current = 5.0, previous = 0.0),
+                comparison("current", current = 4.0, previous = null),
+                comparison("paired", current = 9.0, previous = 10.0),
+            ),
+            ordering = FleetComparisonOrdering.CHANGE,
+        )
+
+        assertEquals(
+            listOf("paired", "zero", "current", "previous", "none", "observer"),
+            ranks.map { it.host.id },
+        )
+        assertNull(ranks.first { it.host.id == "zero" }.deltaPercent)
+        assertEquals(FleetComparisonDirection.SLOWER, ranks.first { it.host.id == "zero" }.direction)
+        assertTrue(ranks.last().isObserver)
+    }
+
+    @Test
+    fun summarySelectsOnlyMaterialPercentMovers() {
+        fun moverRank(
+            id: String,
+            current: Double,
+            previous: Double,
+            observer: Boolean = false,
+        ) = FleetComparisonRank(
+            host = host(id, id.replace('-', ' ')),
+            valueMilliseconds = current,
+            isObserver = observer,
+            sampleCount = if (observer) 0 else 3,
+            previousValueMilliseconds = previous,
+            previousSampleCount = if (observer) 0 else 3,
+            direction = comparisonDirection(current, previous),
+            evidenceSource = FleetComparisonEvidenceSource.CONTROLLER,
+        )
+        val summary = fleetComparisonSummary(
+            listOf(
+                moverRank("smaller-improvement", current = 80.0, previous = 100.0),
+                moverRank("biggest-improvement", current = 100.0, previous = 200.0),
+                moverRank("about-same", current = 104.0, previous = 100.0),
+                moverRank("smaller-slowdown", current = 120.0, previous = 100.0),
+                moverRank("biggest-slowdown", current = 180.0, previous = 100.0),
+                moverRank("zero-baseline", current = 20.0, previous = 0.0),
+                moverRank("observer", current = 1.0, previous = 100.0, observer = true),
+            ),
+        )
+
+        assertEquals("biggest-improvement", summary.biggestImprovement?.hostId)
+        assertEquals(-50.0, summary.biggestImprovement?.deltaPercent ?: 0.0, 0.0)
+        assertEquals(-100.0, summary.biggestImprovement?.deltaMilliseconds ?: 0.0, 0.0)
+        assertEquals("biggest-slowdown", summary.biggestSlowdown?.hostId)
+        assertEquals(80.0, summary.biggestSlowdown?.deltaPercent ?: 0.0, 0.0)
+        assertEquals(80.0, summary.biggestSlowdown?.deltaMilliseconds ?: 0.0, 0.0)
+        assertEquals(6, summary.comparableCount)
+        assertEquals(1, summary.stableCount)
+        assertEquals(3, summary.slowerCount)
+    }
+
+    @Test
+    fun summaryUsesNewDelayAsSlowdownFallbackWithoutInventingAPercentage() {
+        val summary = fleetComparisonSummary(
+            listOf(
+                FleetComparisonRank(
+                    host = host("stable", "Stable"),
+                    valueMilliseconds = 102.0,
+                    isObserver = false,
+                    sampleCount = 2,
+                    previousValueMilliseconds = 100.0,
+                    previousSampleCount = 2,
+                    direction = FleetComparisonDirection.STABLE,
+                ),
+                FleetComparisonRank(
+                    host = host("zero", "Zero baseline"),
+                    valueMilliseconds = 10.0,
+                    isObserver = false,
+                    sampleCount = 2,
+                    previousValueMilliseconds = 0.0,
+                    previousSampleCount = 2,
+                    direction = FleetComparisonDirection.SLOWER,
+                ),
+            ),
+        )
+
+        assertNull(summary.biggestImprovement)
+        assertEquals("zero", summary.biggestSlowdown?.hostId)
+        assertTrue(summary.biggestSlowdown?.isNewDelay == true)
+        assertNull(summary.biggestSlowdown?.deltaPercent)
+        assertEquals(10.0, summary.biggestSlowdown?.deltaMilliseconds ?: 0.0, 0.0)
+        assertEquals(2, summary.comparableCount)
+        assertEquals(1, summary.stableCount)
+        assertEquals(1, summary.slowerCount)
+    }
+
+    @Test
+    fun summaryTruthfullyReportsNoMaterialMoversWhenEverythingIsAboutSame() {
+        val summary = fleetComparisonSummary(
+            listOf(
+                FleetComparisonRank(
+                    host = host("stable", "Stable"),
+                    valueMilliseconds = 102.0,
+                    isObserver = false,
+                    sampleCount = 2,
+                    previousValueMilliseconds = 100.0,
+                    previousSampleCount = 2,
+                    direction = FleetComparisonDirection.STABLE,
+                ),
+                FleetComparisonRank(
+                    host = host("zero", "Zero baseline"),
+                    valueMilliseconds = 2.0,
+                    isObserver = false,
+                    sampleCount = 2,
+                    previousValueMilliseconds = 0.0,
+                    previousSampleCount = 2,
+                    direction = FleetComparisonDirection.STABLE,
+                ),
+            ),
+        )
+
+        assertNull(summary.biggestImprovement)
+        assertNull(summary.biggestSlowdown)
+        assertEquals(2, summary.stableCount)
     }
 
     @Test
@@ -413,5 +599,19 @@ class ComparisonPresentationTest {
         pingMs = ping,
         sshReadyMs = ready,
         fullProbeMs = probe,
+    )
+
+    private fun comparison(
+        hostId: String,
+        current: Double?,
+        previous: Double?,
+    ) = TimingComparison(
+        hostId = hostId,
+        metric = "ping",
+        windowHours = 1,
+        currentAverageMs = current,
+        currentSampleCount = if (current == null) 0 else 2,
+        previousAverageMs = previous,
+        previousSampleCount = if (previous == null) 0 else 2,
     )
 }

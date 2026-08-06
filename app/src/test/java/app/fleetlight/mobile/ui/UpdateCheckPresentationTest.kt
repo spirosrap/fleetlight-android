@@ -69,6 +69,41 @@ class UpdateCheckPresentationTest {
     }
 
     @Test
+    fun liveFeedKeepsControllerFailureScopedAndNeutral() {
+        val state = FleetUiState(
+            feed = feed("Healthy observer", "2026-07-17T10:05:00Z"),
+            connection = FeedConnection.LIVE,
+            controlEndpoint = "https://controller.example/fleetlight/mobile-feed.json",
+            controllerAvailabilityError = "HTTP 502",
+        )
+
+        assertNull(state.controlError)
+        assertEquals(
+            "Fleet status is live. The paired update controller is temporarily unavailable.",
+            controllerAvailabilityNotice(state),
+        )
+        assertEquals(
+            "Fleet status is live. The paired update controller is temporarily unavailable. Technical detail: HTTP 502",
+            controllerAvailabilityNotice(state, includeDetail = true),
+        )
+    }
+
+    @Test
+    fun controllerNoticeRequiresAPairedUnavailableController() {
+        val unpaired = FleetUiState(
+            connection = FeedConnection.LIVE,
+            controllerAvailabilityError = "HTTP 502",
+        )
+        val checking = unpaired.copy(
+            controlEndpoint = "https://controller.example/fleetlight/mobile-feed.json",
+            controlChecking = true,
+        )
+
+        assertNull(controllerAvailabilityNotice(unpaired))
+        assertNull(controllerAvailabilityNotice(checking))
+    }
+
+    @Test
     fun failedReleaseChecksLabelCachedValuesAsLastKnown() {
         assertEquals("Latest 0.144.5", releaseVersionLabel("0.144.5", failed = false))
         assertEquals("Last known 0.144.5", releaseVersionLabel("0.144.5", failed = true))

@@ -1760,7 +1760,12 @@ private fun UpdatesScreen(
         if (state.controlStatus == null) {
             item {
                 ControlMessageCard(
-                    if (state.controlChecking) "Checking paired update controller…" else "Pair an observer in Settings to initiate updates. Status remains available without pairing.",
+                    when {
+                        state.controlChecking -> "Checking paired update controller…"
+                        state.controlEndpoint != null -> controllerAvailabilityNotice(state)
+                            ?: "The paired update controller is not ready yet. Fleet status remains available."
+                        else -> "Pair an observer in Settings to initiate updates. Status remains available without pairing."
+                    },
                 )
             }
         } else if (!state.controlStatus.commandAuthorityEnabled) {
@@ -2022,6 +2027,20 @@ internal val FleetUiState.controlJobReady: Boolean
             activeCheck?.state?.isTerminal != false &&
             activeJob?.state?.isTerminal != false
     }
+
+internal fun controllerAvailabilityNotice(
+    state: FleetUiState,
+    includeDetail: Boolean = false,
+): String? {
+    if (state.controlEndpoint == null || state.controlChecking || state.controllerAvailabilityError == null) return null
+    val statusContext = if (state.connection == FeedConnection.LIVE) {
+        "Fleet status is live. "
+    } else {
+        "Fleet status remains available separately. "
+    }
+    val message = "${statusContext}The paired update controller is temporarily unavailable."
+    return if (includeDetail) "$message Technical detail: ${state.controllerAvailabilityError}" else message
+}
 
 internal fun releaseVersionLabel(version: String?, build: String? = null, failed: Boolean): String? {
     val prefix = if (failed) "Last known" else "Latest"
@@ -2498,6 +2517,9 @@ private fun SettingsScreen(
             }
         }
         state.controlError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        controllerAvailabilityNotice(state, includeDetail = true)?.let {
+            Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        }
 
         HorizontalDivider()
         SettingsInfoCard(

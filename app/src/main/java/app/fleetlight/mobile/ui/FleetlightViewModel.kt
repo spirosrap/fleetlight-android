@@ -67,6 +67,7 @@ data class FleetUiState(
     val controlEndpoint: String? = null,
     val controlChecking: Boolean = false,
     val controlError: String? = null,
+    val controllerAvailabilityError: String? = null,
     val pendingControlAction: PendingControlAction? = null,
     val pendingPairing: PendingPairing? = null,
     val pairing: Boolean = false,
@@ -277,6 +278,7 @@ class FleetlightViewModel(
                     controlStatus = status,
                     controlEndpoint = pending.endpoint,
                     controllerFeed = if (controllerChanged) null else mutableState.value.controllerFeed,
+                    controllerAvailabilityError = null,
                     controlError = when {
                         !status.commandAuthorityEnabled -> "Remote commands are disabled on this observer"
                         !status.jobJournalAvailable -> "The controller job journal is unavailable; updates are disabled"
@@ -312,6 +314,7 @@ class FleetlightViewModel(
             controlEndpoint = null,
             controllerFeed = null,
             controlError = null,
+            controllerAvailabilityError = null,
             activeJob = null,
             jobError = null,
             activeCheck = null,
@@ -680,7 +683,8 @@ class FleetlightViewModel(
                 controlStatus = null,
                 controllerFeed = null,
                 controlChecking = false,
-                controlError = "Pair this controller again",
+                controlError = null,
+                controllerAvailabilityError = "Pair this controller again",
             )
             return
         }
@@ -690,7 +694,12 @@ class FleetlightViewModel(
     }
 
     private suspend fun loadControlStatus(endpoint: String, markChecking: Boolean) {
-        if (markChecking) mutableState.value = mutableState.value.copy(controlChecking = true)
+        if (markChecking) {
+            mutableState.value = mutableState.value.copy(
+                controlChecking = true,
+                controllerAvailabilityError = null,
+            )
+        }
         try {
             fetchAndApplyControlStatus(endpoint)
             refreshControllerFeedBestEffort(endpoint)
@@ -702,7 +711,8 @@ class FleetlightViewModel(
                 mutableState.value = mutableState.value.copy(
                     controlStatus = null,
                     controlChecking = false,
-                    controlError = safeMessage(error, "Controller unavailable"),
+                    controlError = null,
+                    controllerAvailabilityError = safeMessage(error, "Controller unavailable"),
                 )
             }
         }
@@ -721,6 +731,7 @@ class FleetlightViewModel(
         mutableState.value = mutableState.value.copy(
             controlStatus = status,
             controlChecking = false,
+            controllerAvailabilityError = null,
             controlError = when {
                 !status.commandAuthorityEnabled -> "Remote commands are disabled on this observer"
                 !status.jobJournalAvailable -> "The controller job journal is unavailable; updates are disabled"

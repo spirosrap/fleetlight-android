@@ -29,6 +29,28 @@ class FeedRepositoryTest {
     }
 
     @Test
+    fun oneFailedEndpointDoesNotTurnAValidFailoverFeedIntoAnError() = runTest {
+        val live = feedJson("2026-01-01T00:01:00Z", "Live observer")
+        val repository = FeedRepository(
+            source = FeedSource { endpoint ->
+                if (endpoint.contains("unavailable")) error("HTTP 502") else live
+            },
+            cache = MemoryCache(),
+            now = { Instant.parse("2026-01-01T00:01:05Z") },
+        )
+
+        val result = repository.refresh(
+            listOf("https://unavailable.example/feed", "https://live.example/feed"),
+        ) as FeedRefreshResult.Success
+
+        assertFalse(result.fromCache)
+        assertEquals("Live observer", result.feed.observer.name)
+        assertEquals("https://live.example/feed", result.endpoint)
+        assertEquals(1, result.endpointFailures.size)
+        assertTrue(result.endpointFailures.single().contains("HTTP 502"))
+    }
+
+    @Test
     fun fallsBackToLastGoodFeedWhenAllEndpointsFail() = runTest {
         val cachedRaw = feedJson("2026-01-01T00:00:00Z", "Cached")
         val cache = MemoryCache(CachedFeed(cachedRaw, "https://cached.example/feed", Instant.parse("2026-01-01T00:00:05Z")))

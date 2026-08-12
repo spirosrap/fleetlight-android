@@ -39,13 +39,27 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
             val actions = value.arrayValue("actions").mapNotNull { action ->
                 ControlAction.fromWire((action as? JsonPrimitive)?.contentOrNull)
             }.toSet()
+            val hasCodexDesktopAppMetadata = GENERIC_DESKTOP_CAPABILITY_KEYS.any(value::containsKey)
+            val codexDesktopAppUpdateAvailable = if (hasCodexDesktopAppMetadata) {
+                value.boolean("codexDesktopAppUpdateAvailable")
+            } else {
+                value.boolean("codexMacAppUpdateAvailable")
+            }
             ControlCapability(
                 hostId = hostId,
                 hostName = value.text("hostName") ?: hostId,
                 state = value.text("state") ?: "unknown",
                 actions = actions,
                 codexCliUpdateAvailable = value.boolean("codexCliUpdateAvailable") ?: false,
-                codexMacAppUpdateAvailable = value.boolean("codexMacAppUpdateAvailable") ?: false,
+                hasCodexDesktopAppMetadata = hasCodexDesktopAppMetadata,
+                codexDesktopAppPlatform = value.text("codexDesktopAppPlatform"),
+                codexDesktopAppProvider = value.text("codexDesktopAppProvider"),
+                codexDesktopAppVersion = value.text("codexDesktopAppVersion")?.take(MAX_VERSION_LENGTH),
+                codexDesktopAppAvailableVersion = value.text("codexDesktopAppAvailableVersion")
+                    ?.take(MAX_VERSION_LENGTH),
+                codexDesktopAppState = CodexDesktopAppState.fromWire(value.text("codexDesktopAppState")),
+                codexDesktopAppUpdateAvailable = codexDesktopAppUpdateAvailable,
+                codexDesktopAppCheckedAt = value.instant("codexDesktopAppCheckedAt"),
                 linuxUpdateAvailable = value.boolean("linuxUpdateAvailable") ?: false,
                 restartRequired = value.boolean("restartRequired") ?: false,
                 linuxCheckedAt = value.instant("linuxCheckedAt"),
@@ -54,10 +68,13 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
         if (authorityEnabled && capabilities.isEmpty()) {
             throw ControlProtocolException("Control status did not include capabilities")
         }
+        val hasGenericDesktopStatus = GENERIC_DESKTOP_STATUS_KEYS.any(root::containsKey)
         capabilities.forEach { capability ->
             val inconsistent = when {
                 capability.codexCliUpdateAvailable && ControlAction.CODEX_CLI !in capability.actions -> "Codex CLI"
-                capability.codexMacAppUpdateAvailable && ControlAction.CODEX_MAC_APP !in capability.actions -> "Codex Mac app"
+                capability.updateAvailable(ControlAction.CODEX_MAC_APP) &&
+                    ControlAction.CODEX_MAC_APP !in capability.actions ->
+                    "ChatGPT Desktop App"
                 capability.linuxUpdateAvailable && ControlAction.LINUX_OS !in capability.actions -> "Linux OS"
                 capability.restartRequired && ControlAction.RESTART_LINUX !in capability.actions -> "Linux restart"
                 else -> null
@@ -85,10 +102,26 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
             latestCodexCliVersion = root.text("latestCodexCliVersion")?.take(MAX_VERSION_LENGTH),
             codexCliCheckedAt = root.instant("codexCliCheckedAt"),
             codexCliCheckFailed = root.boolean("codexCliCheckFailed") ?: false,
-            latestCodexMacAppVersion = root.text("latestCodexMacAppVersion")?.take(MAX_VERSION_LENGTH),
-            latestCodexMacAppBuild = root.text("latestCodexMacAppBuild")?.take(MAX_BUILD_LENGTH),
-            codexMacAppCheckedAt = root.instant("codexMacAppCheckedAt"),
-            codexMacAppCheckFailed = root.boolean("codexMacAppCheckFailed") ?: false,
+            latestCodexDesktopAppVersion = (if (hasGenericDesktopStatus) {
+                root.text("latestCodexDesktopAppVersion")
+            } else {
+                root.text("latestCodexMacAppVersion")
+            })?.take(MAX_VERSION_LENGTH),
+            latestCodexDesktopAppBuild = (if (hasGenericDesktopStatus) {
+                root.text("latestCodexDesktopAppBuild")
+            } else {
+                root.text("latestCodexMacAppBuild")
+            })?.take(MAX_BUILD_LENGTH),
+            codexDesktopAppCheckedAt = if (hasGenericDesktopStatus) {
+                root.instant("codexDesktopAppCheckedAt")
+            } else {
+                root.instant("codexMacAppCheckedAt")
+            },
+            codexDesktopAppCheckFailed = if (hasGenericDesktopStatus) {
+                root.boolean("codexDesktopAppCheckFailed") ?: false
+            } else {
+                root.boolean("codexMacAppCheckFailed") ?: false
+            },
             recentJobs = recentJobs.map { it.withCapabilityNames(capabilities) },
         )
     }
@@ -193,6 +226,21 @@ class ControlParser(private val json: Json = Json { ignoreUnknownKeys = true }) 
     }
 
     private companion object {
+        val GENERIC_DESKTOP_CAPABILITY_KEYS = setOf(
+            "codexDesktopAppPlatform",
+            "codexDesktopAppProvider",
+            "codexDesktopAppVersion",
+            "codexDesktopAppAvailableVersion",
+            "codexDesktopAppState",
+            "codexDesktopAppUpdateAvailable",
+            "codexDesktopAppCheckedAt",
+        )
+        val GENERIC_DESKTOP_STATUS_KEYS = setOf(
+            "latestCodexDesktopAppVersion",
+            "latestCodexDesktopAppBuild",
+            "codexDesktopAppCheckedAt",
+            "codexDesktopAppCheckFailed",
+        )
         const val MAX_MESSAGE_LENGTH = 400
         const val MAX_TOKEN_LENGTH = 4096
         const val MAX_VERSION_LENGTH = 80

@@ -93,6 +93,25 @@ class ControlRepositoryTest {
     }
 
     @Test
+    fun desktopAppSubmitsLegacyWireValueAndAcceptsGenericResponseAlias() = runTest {
+        val transport = QueueTransport(
+            mutableListOf(jobJson(requestId, "codex-desktop-app", listOf("linux-a"))),
+        )
+        val repository = ControlRepository(transport, pairedCredentials())
+
+        val job = repository.createJob(
+            endpoint,
+            ControlAction.CODEX_MAC_APP,
+            listOf("linux-a"),
+            requestId,
+        )
+
+        assertEquals(ControlAction.CODEX_MAC_APP, job.action)
+        assertTrue(transport.requests.single().body.orEmpty().contains("\"action\":\"codex-mac-app\""))
+        assertTrue(transport.requests.single().body.orEmpty().contains("\"targetHostIds\":[\"linux-a\"]"))
+    }
+
+    @Test
     fun refusesTokenOnDifferentControlBase() = runTest {
         val credentials = pairedCredentials()
         val repository = ControlRepository(QueueTransport(mutableListOf()), credentials)

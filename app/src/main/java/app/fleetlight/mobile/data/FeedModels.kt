@@ -58,6 +58,27 @@ enum class HostState {
     }
 }
 
+enum class CodexDesktopAppState {
+    CURRENT,
+    UPDATE_AVAILABLE,
+    MISSING,
+    OFFLINE,
+    UNAVAILABLE;
+
+    companion object {
+        fun fromWire(raw: String?): CodexDesktopAppState? = when (
+            raw?.trim()?.lowercase()?.replace("_", "-")
+        ) {
+            "current" -> CURRENT
+            "update-available" -> UPDATE_AVAILABLE
+            "missing" -> MISSING
+            "offline" -> OFFLINE
+            "unavailable" -> UNAVAILABLE
+            else -> null
+        }
+    }
+}
+
 data class FleetHost(
     val id: String,
     val name: String,
@@ -83,8 +104,14 @@ data class FleetHost(
     val restartRequired: Boolean = false,
     val services: List<HostService> = emptyList(),
     val warnings: List<HostWarning> = emptyList(),
-    val codexMacAppVersion: String? = null,
-    val codexMacAppBuild: String? = null,
+    val codexDesktopAppPlatform: String? = null,
+    val codexDesktopAppProvider: String? = null,
+    val codexDesktopAppVersion: String? = null,
+    val codexDesktopAppBuild: String? = null,
+    val codexDesktopAppAvailableVersion: String? = null,
+    val codexDesktopAppState: CodexDesktopAppState? = null,
+    val codexDesktopAppUpdateAvailable: Boolean? = null,
+    val codexDesktopAppCheckedAt: Instant? = null,
     val isPinned: Boolean = false,
 )
 

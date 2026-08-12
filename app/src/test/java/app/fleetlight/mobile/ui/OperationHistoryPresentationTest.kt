@@ -14,6 +14,17 @@ import org.junit.Test
 
 class OperationHistoryPresentationTest {
     @Test
+    fun desktopReceiptsUseCrossPlatformTitle() {
+        val receipt = ControlJob(
+            id = "desktop-job",
+            action = ControlAction.CODEX_MAC_APP,
+            state = ControlJobState.SUCCEEDED,
+        )
+
+        assertEquals("ChatGPT Desktop App", receipt.action.title)
+    }
+
+    @Test
     fun pinnedHostsSortBeforeIssuePriorityThenKeepIssueOrdering() {
         val hosts = listOf(
             FleetHost("offline", "Offline", state = HostState.OFFLINE),

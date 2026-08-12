@@ -81,6 +81,7 @@ class FeedParser(
         val value = element as? JsonObject ?: return null
         val id = value.string("id", "hostId") ?: "host-$index"
         val rawState = value.string("state") ?: value.string("status")
+        val hasCodexDesktopAppMetadata = GENERIC_DESKTOP_FEED_KEYS.any(value::containsKey)
         return FleetHost(
             id = id,
             name = value.string("name", "hostName") ?: id,
@@ -106,8 +107,26 @@ class FeedParser(
             restartRequired = value.bool("restartRequired", "rebootRequired") ?: false,
             services = value.serviceArray("services"),
             warnings = value.warningArray("warnings", "alerts"),
-            codexMacAppVersion = value.string("codexMacAppVersion", "codexAppVersion"),
-            codexMacAppBuild = value.string("codexMacAppBuild", "codexAppBuild"),
+            codexDesktopAppPlatform = value.string("codexDesktopAppPlatform"),
+            codexDesktopAppProvider = value.string("codexDesktopAppProvider"),
+            codexDesktopAppVersion = value.string(
+                "codexDesktopAppVersion",
+                "codexMacAppVersion",
+                "codexAppVersion",
+            ),
+            codexDesktopAppBuild = value.string(
+                "codexDesktopAppBuild",
+                "codexMacAppBuild",
+                "codexAppBuild",
+            ),
+            codexDesktopAppAvailableVersion = value.string("codexDesktopAppAvailableVersion"),
+            codexDesktopAppState = CodexDesktopAppState.fromWire(value.string("codexDesktopAppState")),
+            codexDesktopAppUpdateAvailable = if (hasCodexDesktopAppMetadata) {
+                value.bool("codexDesktopAppUpdateAvailable")
+            } else {
+                value.bool("codexMacAppUpdateAvailable")
+            },
+            codexDesktopAppCheckedAt = value.instant("codexDesktopAppCheckedAt"),
             isPinned = value.bool("isPinned", "pinned") ?: false,
         )
     }
@@ -196,6 +215,16 @@ class FeedParser(
 }
 
 private val SUPPORTED_TIMING_COMPARISON_METRICS = setOf("ping", "sshReady", "checks", "fullProbe")
+private val GENERIC_DESKTOP_FEED_KEYS = setOf(
+    "codexDesktopAppPlatform",
+    "codexDesktopAppProvider",
+    "codexDesktopAppVersion",
+    "codexDesktopAppBuild",
+    "codexDesktopAppAvailableVersion",
+    "codexDesktopAppState",
+    "codexDesktopAppUpdateAvailable",
+    "codexDesktopAppCheckedAt",
+)
 
 private data class OptionalNumber(val value: Double?)
 private data class OptionalCount(val value: Int)

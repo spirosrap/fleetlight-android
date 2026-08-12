@@ -37,8 +37,14 @@
       "loadAverage": 1.2,
       "bootDescription": "Up for 4 days",
       "codexCliVersion": "1.0.0",
-      "codexMacAppVersion": "1.0",
-      "codexMacAppBuild": "100",
+      "codexDesktopAppPlatform": "macOS",
+      "codexDesktopAppProvider": "macos-appcast",
+      "codexDesktopAppVersion": "1.0",
+      "codexDesktopAppBuild": "100",
+      "codexDesktopAppAvailableVersion": "1.0",
+      "codexDesktopAppState": "current",
+      "codexDesktopAppUpdateAvailable": false,
+      "codexDesktopAppCheckedAt": "2026-01-15T11:59:30Z",
       "fleetlightVersion": "1.0",
       "services": [
         { "name": "Web service", "state": "running" }
@@ -57,6 +63,13 @@
       "pingMs": 74,
       "jitterMs": 7,
       "packetLossPercent": 0,
+      "codexDesktopAppPlatform": "Linux",
+      "codexDesktopAppProvider": "linux-apt",
+      "codexDesktopAppVersion": "1.0",
+      "codexDesktopAppAvailableVersion": "1.1",
+      "codexDesktopAppState": "update-available",
+      "codexDesktopAppUpdateAvailable": true,
+      "codexDesktopAppCheckedAt": "2026-01-15T11:59:00Z",
       "restartRequired": true,
       "warnings": [
         { "kind": "restart", "title": "Restart required", "detail": "A new kernel is ready." }

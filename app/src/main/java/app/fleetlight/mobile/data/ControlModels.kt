@@ -5,7 +5,7 @@ import java.util.UUID
 
 enum class ControlAction(val wireValue: String, val title: String) {
     CODEX_CLI("codex-cli", "Codex CLI"),
-    CODEX_MAC_APP("codex-mac-app", "Codex Mac app"),
+    CODEX_MAC_APP("codex-mac-app", "ChatGPT Desktop App"),
     LINUX_OS("linux-os", "Linux OS"),
     RESTART_LINUX("restart-linux", "Restart Linux"),
     REFRESH_HOSTS("refresh-hosts", "Recheck");
@@ -20,8 +20,16 @@ enum class ControlAction(val wireValue: String, val title: String) {
         get() = this == RESTART_LINUX
 
     companion object {
-        fun fromWire(raw: String?): ControlAction? = entries.firstOrNull {
-            it.wireValue.equals(raw, ignoreCase = true) || it.name.equals(raw, ignoreCase = true)
+        fun fromWire(raw: String?): ControlAction? {
+            val value = raw?.trim() ?: return null
+            if (value.equals("codex-desktop-app", ignoreCase = true) ||
+                value.equals("CODEX_DESKTOP_APP", ignoreCase = true)
+            ) {
+                return CODEX_MAC_APP
+            }
+            return entries.firstOrNull {
+                it.wireValue.equals(value, ignoreCase = true) || it.name.equals(value, ignoreCase = true)
+            }
         }
     }
 }
@@ -114,10 +122,10 @@ data class ControlStatus(
     val latestCodexCliVersion: String? = null,
     val codexCliCheckedAt: Instant? = null,
     val codexCliCheckFailed: Boolean = false,
-    val latestCodexMacAppVersion: String? = null,
-    val latestCodexMacAppBuild: String? = null,
-    val codexMacAppCheckedAt: Instant? = null,
-    val codexMacAppCheckFailed: Boolean = false,
+    val latestCodexDesktopAppVersion: String? = null,
+    val latestCodexDesktopAppBuild: String? = null,
+    val codexDesktopAppCheckedAt: Instant? = null,
+    val codexDesktopAppCheckFailed: Boolean = false,
     val recentJobs: List<ControlJob> = emptyList(),
 )
 
@@ -127,7 +135,14 @@ data class ControlCapability(
     val state: String = "unknown",
     val actions: Set<ControlAction> = emptySet(),
     val codexCliUpdateAvailable: Boolean = false,
-    val codexMacAppUpdateAvailable: Boolean = false,
+    val hasCodexDesktopAppMetadata: Boolean = false,
+    val codexDesktopAppPlatform: String? = null,
+    val codexDesktopAppProvider: String? = null,
+    val codexDesktopAppVersion: String? = null,
+    val codexDesktopAppAvailableVersion: String? = null,
+    val codexDesktopAppState: CodexDesktopAppState? = null,
+    val codexDesktopAppUpdateAvailable: Boolean? = null,
+    val codexDesktopAppCheckedAt: Instant? = null,
     val linuxUpdateAvailable: Boolean = false,
     val restartRequired: Boolean = false,
     val linuxCheckedAt: Instant? = null,
@@ -204,7 +219,15 @@ data class ControlCheck(
 
 fun ControlCapability.updateAvailable(action: ControlAction): Boolean = when (action) {
     ControlAction.CODEX_CLI -> codexCliUpdateAvailable
-    ControlAction.CODEX_MAC_APP -> codexMacAppUpdateAvailable
+    ControlAction.CODEX_MAC_APP -> when (codexDesktopAppState) {
+        CodexDesktopAppState.UPDATE_AVAILABLE -> true
+        CodexDesktopAppState.CURRENT,
+        CodexDesktopAppState.MISSING,
+        CodexDesktopAppState.OFFLINE,
+        CodexDesktopAppState.UNAVAILABLE,
+        -> false
+        null -> codexDesktopAppUpdateAvailable == true
+    }
     ControlAction.LINUX_OS -> linuxUpdateAvailable
     ControlAction.RESTART_LINUX, ControlAction.REFRESH_HOSTS -> false
 }
@@ -323,7 +346,8 @@ fun PendingControlAction.confirmationCopy(): ControlConfirmationCopy {
     }
     val warning = when (action) {
         ControlAction.CODEX_CLI -> "Active Codex CLI sessions may be interrupted."
-        ControlAction.CODEX_MAC_APP -> "The Codex Mac app restarts automatically after updating."
+        ControlAction.CODEX_MAC_APP ->
+            "The ChatGPT Desktop App may close and reopen on macOS or Linux while updating."
         ControlAction.LINUX_OS -> "Packages will update sequentially. Machines will not reboot automatically."
         ControlAction.RESTART_LINUX -> error("Handled above")
         ControlAction.REFRESH_HOSTS -> error("Handled above")

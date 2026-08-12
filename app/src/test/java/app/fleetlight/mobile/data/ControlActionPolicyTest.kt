@@ -63,6 +63,61 @@ class ControlActionPolicyTest {
     }
 
     @Test
+    fun desktopAppUsesGenericCopyWhileKeepingLegacyWireCompatibility() {
+        val action = ControlAction.CODEX_MAC_APP
+        val mac = capability(
+            actions = setOf(action),
+            codexDesktopAppUpdateAvailable = true,
+        )
+        val linux = mac.copy(hostId = "host-linux", hostName = "Studio Linux")
+
+        assertEquals("codex-mac-app", action.wireValue)
+        assertEquals("ChatGPT Desktop App", action.title)
+        assertEquals(action, ControlAction.fromWire("codex-mac-app"))
+        assertEquals(action, ControlAction.fromWire("codex-desktop-app"))
+        assertEquals(action, ControlAction.fromWire("CODEX_DESKTOP_APP"))
+        assertTrue(mac.eligibleFor(action))
+        assertTrue(linux.eligibleFor(action))
+        assertFalse(linux.copy(state = "offline").eligibleFor(action))
+
+        val copy = PendingControlAction(
+            action = action,
+            targetHostIds = listOf(mac.hostId, linux.hostId),
+            targetHostNames = listOf(mac.hostName, linux.hostName),
+        ).confirmationCopy()
+        assertEquals("Update ChatGPT Desktop App?", copy.title)
+        assertTrue(copy.description.contains("may close and reopen on macOS or Linux"))
+    }
+
+    @Test
+    fun desktopAppUnknownAvailabilityIsNeverEligibleOrTreatedAsCurrent() {
+        val unknown = capability(
+            actions = setOf(ControlAction.CODEX_MAC_APP),
+            hasCodexDesktopAppMetadata = true,
+            codexDesktopAppUpdateAvailable = null,
+        )
+        val legacyCurrent = unknown.copy(
+            hasCodexDesktopAppMetadata = false,
+            codexDesktopAppUpdateAvailable = false,
+        )
+
+        assertFalse(unknown.updateAvailable(ControlAction.CODEX_MAC_APP))
+        assertFalse(unknown.eligibleFor(ControlAction.CODEX_MAC_APP))
+        assertFalse(legacyCurrent.updateAvailable(ControlAction.CODEX_MAC_APP))
+        assertFalse(legacyCurrent.eligibleFor(ControlAction.CODEX_MAC_APP))
+
+        val available = unknown.copy(codexDesktopAppState = CodexDesktopAppState.UPDATE_AVAILABLE)
+        val missing = unknown.copy(
+            codexDesktopAppState = CodexDesktopAppState.MISSING,
+            codexDesktopAppUpdateAvailable = true,
+        )
+        assertTrue(available.updateAvailable(ControlAction.CODEX_MAC_APP))
+        assertTrue(available.eligibleFor(ControlAction.CODEX_MAC_APP))
+        assertFalse(missing.updateAvailable(ControlAction.CODEX_MAC_APP))
+        assertFalse(missing.eligibleFor(ControlAction.CODEX_MAC_APP))
+    }
+
+    @Test
     fun readOnlyRecheckSupportsOfflineMachinesAndNeverUsesUpdateConfirmation() {
         val offline = capability(actions = setOf(ControlAction.REFRESH_HOSTS)).copy(state = "offline")
         val unsupported = offline.copy(actions = emptySet())
@@ -105,6 +160,8 @@ class ControlActionPolicyTest {
     private fun capability(
         actions: Set<ControlAction>,
         codexCliUpdateAvailable: Boolean = false,
+        hasCodexDesktopAppMetadata: Boolean = false,
+        codexDesktopAppUpdateAvailable: Boolean? = false,
         restartRequired: Boolean = false,
     ) = ControlCapability(
         hostId = "host-a",
@@ -112,6 +169,8 @@ class ControlActionPolicyTest {
         state = "online",
         actions = actions,
         codexCliUpdateAvailable = codexCliUpdateAvailable,
+        hasCodexDesktopAppMetadata = hasCodexDesktopAppMetadata,
+        codexDesktopAppUpdateAvailable = codexDesktopAppUpdateAvailable,
         restartRequired = restartRequired,
     )
 }

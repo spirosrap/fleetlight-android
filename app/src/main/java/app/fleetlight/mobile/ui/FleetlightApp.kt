@@ -99,6 +99,7 @@ import app.fleetlight.mobile.data.ControlCheckState
 import app.fleetlight.mobile.data.ControlEndpointPolicy
 import app.fleetlight.mobile.data.ControlJob
 import app.fleetlight.mobile.data.ControlJobState
+import app.fleetlight.mobile.data.CodexDesktopAppState
 import app.fleetlight.mobile.data.FeedObserver
 import app.fleetlight.mobile.data.FleetHost
 import app.fleetlight.mobile.data.FleetIncident
@@ -669,9 +670,31 @@ private fun DetailGrid(host: FleetHost) {
         host.loadAverage?.let { DetailRow("Load average", formatDecimal(it)) }
         host.bootDescription?.let { DetailRow("Boot", it) }
         if (host.restartRequired) DetailRow("Restart", "Required")
-        host.codexMacAppVersion?.let { version ->
-            DetailRow("Codex Mac app", listOfNotNull(version, host.codexMacAppBuild?.let { "build $it" }).joinToString(" · "))
+        host.codexDesktopAppVersion
+            ?.takeUnless { host.effectiveDesktopAppState == CodexDesktopAppState.MISSING }
+            ?.let { version ->
+                DetailRow(
+                    "ChatGPT Desktop App",
+                    listOfNotNull(
+                        host.desktopAppPlatformLabel,
+                        version,
+                        host.codexDesktopAppBuild?.let { "build $it" },
+                    ).joinToString(" · "),
+                )
+            }
+        host.desktopAppProviderLabel?.let { DetailRow("Desktop app provider", it) }
+        when (host.effectiveDesktopAppState) {
+            CodexDesktopAppState.UPDATE_AVAILABLE -> DetailRow(
+                "Desktop app update",
+                host.codexDesktopAppAvailableVersion?.let { "$it available" } ?: "Available",
+            )
+            CodexDesktopAppState.CURRENT -> DetailRow("Desktop app update", "Current")
+            CodexDesktopAppState.MISSING -> DetailRow("Desktop app update", "Not installed")
+            CodexDesktopAppState.OFFLINE -> DetailRow("Desktop app update", "Offline")
+            CodexDesktopAppState.UNAVAILABLE -> DetailRow("Desktop app update", "Unavailable")
+            null -> if (host.hasDesktopAppMetadata) DetailRow("Desktop app update", "Check required")
         }
+        host.codexDesktopAppCheckedAt?.let { DetailRow("Desktop app checked", dateTime(it)) }
         if (host.services.isNotEmpty()) {
             DetailRow("Services", host.services.joinToString { "${it.name}: ${it.state}" })
         }
@@ -1895,14 +1918,15 @@ private fun UpdateCheckCard(state: FleetUiState, onCheckForUpdates: () -> Unit) 
                 failed = status?.codexCliCheckFailed == true,
             )
             VersionCheckRow(
-                title = "Codex Mac app",
+                title = "ChatGPT Desktop App",
                 latest = releaseVersionLabel(
-                    version = status?.latestCodexMacAppVersion,
-                    build = status?.latestCodexMacAppBuild,
-                    failed = status?.codexMacAppCheckFailed == true,
+                    version = status?.latestCodexDesktopAppVersion,
+                    build = status?.latestCodexDesktopAppBuild,
+                    failed = status?.codexDesktopAppCheckFailed == true,
                 ),
-                checkedAt = status?.codexMacAppCheckedAt,
-                failed = status?.codexMacAppCheckFailed == true,
+                checkedAt = status?.codexDesktopAppCheckedAt,
+                failed = status?.codexDesktopAppCheckFailed == true,
+                scope = "macOS latest · Linux checked per machine",
             )
             val linuxSummary = linuxCheckPresentation(state.updatesFeed?.linuxUpdates.orEmpty())
             VersionCheckRow(
@@ -1929,10 +1953,18 @@ private fun VersionCheckRow(
     checkedAt: Instant?,
     failed: Boolean,
     failureLabel: String = "Check failed",
+    scope: String? = null,
 ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.SemiBold)
+            scope?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
                 latest ?: if (failed) "Latest version unavailable" else "Latest version not checked",
                 style = MaterialTheme.typography.bodySmall,
@@ -2066,13 +2098,9 @@ private fun UpdateActionSection(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(action.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    val availability = updateAvailabilitySummary(action, capabilities, supported, available)
                     Text(
-                        when {
-                            capabilities.isEmpty() -> "Pair to load eligible machines"
-                            supported.any { it.updateAvailable(action) } && available.isEmpty() -> "Controller check required"
-                            available.isEmpty() -> "No update available"
-                            else -> "${available.size} update${if (available.size == 1) "" else "s"} available"
-                        },
+                        listOfNotNull(action.platformScope, availability).joinToString(" · "),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -2080,19 +2108,36 @@ private fun UpdateActionSection(
                     onClick = { onRequestUpdate(action, available.map { it.hostId }) },
                     enabled = enabled && available.isNotEmpty(),
                 ) {
-                    Text("Update all")
+                    Text(updateAllButtonLabel(action, supported, available))
                 }
             }
             supported.forEach { capability ->
-                val installed = feed.installedVersion(capability.hostId, action)
+                val installed = feed.installedVersion(capability.hostId, action, capability)
                 val unavailable = capability.isUnavailable
+                val host = feed.hosts.firstOrNull { it.id == capability.hostId }
+                val platform = (
+                    capability.codexDesktopAppPlatform?.desktopAppPlatformLabel()
+                        ?: host?.desktopAppPlatformLabel
+                    ).takeIf { action == ControlAction.CODEX_MAC_APP }
+                val availableVersion = (
+                    capability.codexDesktopAppAvailableVersion ?: host?.codexDesktopAppAvailableVersion
+                    ).takeIf {
+                    action == ControlAction.CODEX_MAC_APP && capability.updateAvailable(action)
+                }
+                val installedLabel = when {
+                    installed != null -> installed
+                    action == ControlAction.CODEX_MAC_APP && capability.desktopAppKnownNotInstalled -> "Not installed"
+                    else -> "Installed version unavailable"
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(capability.safeHostName(), fontWeight = FontWeight.SemiBold)
                         Text(
-                            listOf(
-                                installed ?: "Installed version unavailable",
-                                capability.controllerUpdateReport(action),
+                            listOfNotNull(
+                                platform,
+                                installedLabel,
+                                capability.controllerUpdateReport(action, installed, availableVersion),
+                                desktopAppFreshnessLabel(action, capability, host),
                             ).joinToString(" · "),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2666,10 +2711,63 @@ private fun formatDecimal(value: Double): String = if (value == value.roundToInt
 private val ControlCapability.isUnavailable: Boolean
     get() = !commandReachable
 
-private fun ControlCapability.controllerUpdateReport(action: ControlAction): String = when {
+internal fun updateAvailabilitySummary(
+    action: ControlAction,
+    capabilities: List<ControlCapability>,
+    supported: List<ControlCapability>,
+    available: List<ControlCapability>,
+): String {
+    if (capabilities.isEmpty()) return "Pair to load eligible machines"
+    if (action != ControlAction.CODEX_MAC_APP) {
+        return when {
+            supported.any { it.updateAvailable(action) } && available.isEmpty() -> "Controller check required"
+            available.isEmpty() -> "No update available"
+            else -> "${available.size} update${if (available.size == 1) "" else "s"} available"
+        }
+    }
+    val unknown = supported.count { !it.desktopAppStateKnown }
+    val missing = supported.count { it.codexDesktopAppState == CodexDesktopAppState.MISSING }
+    val offline = supported.count { it.codexDesktopAppState == CodexDesktopAppState.OFFLINE }
+    val unavailable = supported.count { it.codexDesktopAppState == CodexDesktopAppState.UNAVAILABLE }
+    return buildList {
+        if (available.isNotEmpty()) {
+            add("${available.size} update${if (available.size == 1) "" else "s"} available")
+        }
+        if (unknown > 0) add("$unknown check${if (unknown == 1) "" else "s"} required")
+        if (missing > 0) add("$missing not installed")
+        if (offline > 0) add("$offline offline")
+        if (unavailable > 0) add("$unavailable unavailable")
+        if (isEmpty() && supported.any { it.updateAvailable(action) }) add("Controller check required")
+        if (isEmpty()) add("No update available")
+    }.joinToString(" · ")
+}
+
+internal fun updateAllButtonLabel(
+    action: ControlAction,
+    supported: List<ControlCapability>,
+    available: List<ControlCapability>,
+): String = when {
+    action != ControlAction.CODEX_MAC_APP -> "Update all"
+    supported.none { !it.desktopAppStateKnown } -> "Update all"
+    available.isEmpty() -> "Check required"
+    else -> "Update known"
+}
+
+internal fun ControlCapability.controllerUpdateReport(
+    action: ControlAction,
+    installedVersion: String? = null,
+    availableVersion: String? = null,
+): String = when {
     state.equals("offline", ignoreCase = true) || state.equals("unreachable", ignoreCase = true) ->
         "Controller reports offline"
     isUnavailable -> "Controller check required"
+    action == ControlAction.CODEX_MAC_APP && codexDesktopAppState == CodexDesktopAppState.OFFLINE ->
+        "Desktop app check offline"
+    action == ControlAction.CODEX_MAC_APP && codexDesktopAppState == CodexDesktopAppState.UNAVAILABLE ->
+        "Desktop app unavailable"
+    action == ControlAction.CODEX_MAC_APP && desktopAppKnownNotInstalled -> "Not installed"
+    action == ControlAction.CODEX_MAC_APP && !desktopAppStateKnown -> "Check required"
+    updateAvailable(action) && availableVersion != null -> "Available $availableVersion"
     updateAvailable(action) -> "Controller reports update available"
     else -> "Controller reports current"
 }
@@ -2683,24 +2781,102 @@ private val ControlCapability.controllerRestartReport: String
         else -> "Controller reports restart not required"
     }
 
-private fun ControlCapability.updateButtonLabel(action: ControlAction, installedVersion: String?): String = when {
+internal fun ControlCapability.updateButtonLabel(action: ControlAction, installedVersion: String?): String = when {
+    isUnavailable -> "Unavailable"
+    action == ControlAction.CODEX_MAC_APP && codexDesktopAppState == CodexDesktopAppState.OFFLINE -> "Offline"
+    action == ControlAction.CODEX_MAC_APP && codexDesktopAppState == CodexDesktopAppState.UNAVAILABLE -> "Unavailable"
+    action == ControlAction.CODEX_MAC_APP && desktopAppKnownNotInstalled -> "Not installed"
+    action == ControlAction.CODEX_MAC_APP && !desktopAppStateKnown -> "Check required"
     updateAvailable(action) && action != ControlAction.LINUX_OS && installedVersion == null -> "Install"
     updateAvailable(action) -> "Update"
-    isUnavailable -> "Unavailable"
     else -> "Current"
 }
 
-private fun MobileFeed.installedVersion(hostId: String, action: ControlAction): String? = when (action) {
+private fun MobileFeed.installedVersion(
+    hostId: String,
+    action: ControlAction,
+    capability: ControlCapability? = null,
+): String? = when (action) {
     ControlAction.CODEX_CLI -> hosts.firstOrNull { it.id == hostId }?.codexCliVersion?.let { "Installed $it" }
-    ControlAction.CODEX_MAC_APP -> hosts.firstOrNull { it.id == hostId }?.let { host ->
-        host.codexMacAppVersion?.let { version ->
-            listOfNotNull("Installed $version", host.codexMacAppBuild?.let { "build $it" }).joinToString(" · ")
+    ControlAction.CODEX_MAC_APP -> {
+        if (capability?.desktopAppKnownNotInstalled == true) {
+            null
+        } else {
+            val host = hosts.firstOrNull { it.id == hostId }
+            val version = capability?.codexDesktopAppVersion ?: host?.codexDesktopAppVersion
+            val build = host?.codexDesktopAppBuild.takeIf {
+                capability?.codexDesktopAppVersion == null || capability.codexDesktopAppVersion == host?.codexDesktopAppVersion
+            }
+            version?.let {
+                listOfNotNull("Installed $it", build?.let { value -> "build $value" }).joinToString(" · ")
+            }
         }
     }
     ControlAction.LINUX_OS, ControlAction.RESTART_LINUX ->
         hosts.firstOrNull { it.id == hostId }?.operatingSystem?.let { "Installed $it" }
     ControlAction.REFRESH_HOSTS -> null
 }
+
+private val ControlAction.platformScope: String?
+    get() = if (this == ControlAction.CODEX_MAC_APP) "macOS and Linux" else null
+
+internal val FleetHost.desktopAppPlatformLabel: String?
+    get() {
+        val raw = codexDesktopAppPlatform?.trim()?.takeIf(String::isNotEmpty)
+            ?: platform.trim().takeIf(String::isNotEmpty)
+            ?: return null
+        return raw.desktopAppPlatformLabel()
+    }
+
+private fun String.desktopAppPlatformLabel(): String? = when {
+    equals("unknown", ignoreCase = true) -> null
+    equals("macOS", ignoreCase = true) || equals("darwin", ignoreCase = true) -> "macOS"
+    contains("linux", ignoreCase = true) -> "Linux"
+    else -> take(32)
+}
+
+private val FleetHost.hasDesktopAppMetadata: Boolean
+    get() = codexDesktopAppPlatform != null ||
+        codexDesktopAppProvider != null ||
+        codexDesktopAppVersion != null ||
+        codexDesktopAppAvailableVersion != null ||
+        codexDesktopAppState != null ||
+        codexDesktopAppUpdateAvailable != null ||
+        codexDesktopAppCheckedAt != null
+
+private val ControlCapability.desktopAppKnownNotInstalled: Boolean
+    get() = codexDesktopAppState == CodexDesktopAppState.MISSING
+
+private val ControlCapability.desktopAppStateKnown: Boolean
+    get() = codexDesktopAppState != null || codexDesktopAppUpdateAvailable != null
+
+internal fun desktopAppFreshnessLabel(
+    action: ControlAction,
+    capability: ControlCapability,
+    host: FleetHost?,
+    now: Instant = Instant.now(),
+): String? {
+    if (action != ControlAction.CODEX_MAC_APP) return null
+    val checkedAt = capability.codexDesktopAppCheckedAt ?: host?.codexDesktopAppCheckedAt ?: return null
+    return "Checked ${relativeTime(checkedAt, now)}"
+}
+
+private val FleetHost.effectiveDesktopAppState: CodexDesktopAppState?
+    get() = codexDesktopAppState ?: when (codexDesktopAppUpdateAvailable) {
+        true -> CodexDesktopAppState.UPDATE_AVAILABLE
+        false -> CodexDesktopAppState.CURRENT
+        null -> null
+    }
+
+internal val FleetHost.desktopAppProviderLabel: String?
+    get() {
+        val raw = codexDesktopAppProvider?.trim()?.takeIf(String::isNotEmpty) ?: return null
+        return when {
+            raw.equals("macos-appcast", ignoreCase = true) -> "Signed macOS appcast"
+            raw.equals("linux-apt", ignoreCase = true) -> "OpenAI APT repository"
+            else -> raw.take(80)
+        }
+    }
 
 private val app.fleetlight.mobile.data.ControlJobTarget.displayProgress: String
     get() = when (state) {

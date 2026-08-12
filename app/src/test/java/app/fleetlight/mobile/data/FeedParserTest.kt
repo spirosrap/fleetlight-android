@@ -29,7 +29,21 @@ class FeedParserTest {
         val workstation = feed.hosts.first()
         assertTrue(workstation.isPinned)
         assertEquals(44.0, workstation.diskPercent ?: -1.0, 0.0)
-        assertEquals("1.0", workstation.codexMacAppVersion)
+        assertEquals("macOS", workstation.codexDesktopAppPlatform)
+        assertEquals("macos-appcast", workstation.codexDesktopAppProvider)
+        assertEquals("1.0", workstation.codexDesktopAppVersion)
+        assertEquals("100", workstation.codexDesktopAppBuild)
+        assertEquals(CodexDesktopAppState.CURRENT, workstation.codexDesktopAppState)
+        assertFalse(workstation.codexDesktopAppUpdateAvailable ?: true)
+        assertEquals(Instant.parse("2026-01-15T11:59:30Z"), workstation.codexDesktopAppCheckedAt)
+        val linux = feed.hosts.first { it.id == "media-server" }
+        assertEquals("Linux", linux.codexDesktopAppPlatform)
+        assertEquals("linux-apt", linux.codexDesktopAppProvider)
+        assertEquals("1.0", linux.codexDesktopAppVersion)
+        assertEquals("1.1", linux.codexDesktopAppAvailableVersion)
+        assertEquals(CodexDesktopAppState.UPDATE_AVAILABLE, linux.codexDesktopAppState)
+        assertTrue(linux.codexDesktopAppUpdateAvailable == true)
+        assertEquals(Instant.parse("2026-01-15T11:59:00Z"), linux.codexDesktopAppCheckedAt)
         assertEquals("running", workstation.services.single().state)
         assertTrue(feed.linuxUpdates.single().restartRequired)
         assertEquals("Machine went offline", feed.incidents.single().title)
@@ -63,6 +77,98 @@ class FeedParserTest {
         assertEquals(null, feed.metricsWindowHours)
         assertEquals(null, feed.metricsSampleIntervalSeconds)
         assertTrue(feed.timingComparisons.isEmpty())
+    }
+
+    @Test
+    fun desktopAppFieldsPreferGenericValuesAndKeepLegacyFeedsCompatible() {
+        val feed = parser.parse(
+            """{
+              "schemaVersion": 1,
+              "generatedAt": "2026-01-01T00:00:00Z",
+              "hosts": [
+                {
+                  "id": "generic",
+                  "name": "Generic Linux",
+                  "platform": "Linux",
+                  "codexDesktopAppPlatform": "Linux",
+                  "codexDesktopAppProvider": "linux-apt",
+                  "codexDesktopAppVersion": "2.0",
+                  "codexMacAppVersion": "legacy-wrong",
+                  "codexDesktopAppBuild": "200",
+                  "codexMacAppBuild": "legacy-build",
+                  "codexDesktopAppAvailableVersion": "2.1",
+                  "codexDesktopAppState": "current",
+                  "codexDesktopAppUpdateAvailable": false,
+                  "codexDesktopAppCheckedAt": "2026-01-01T00:01:00Z",
+                  "codexMacAppUpdateAvailable": true
+                },
+                {
+                  "id": "legacy",
+                  "name": "Legacy Mac",
+                  "platform": "macOS",
+                  "codexMacAppVersion": "1.9",
+                  "codexMacAppBuild": "190",
+                  "codexMacAppUpdateAvailable": true
+                }
+              ]
+            }""",
+        )
+
+        val generic = feed.hosts.first { it.id == "generic" }
+        assertEquals("Linux", generic.codexDesktopAppPlatform)
+        assertEquals("linux-apt", generic.codexDesktopAppProvider)
+        assertEquals("2.0", generic.codexDesktopAppVersion)
+        assertEquals("200", generic.codexDesktopAppBuild)
+        assertEquals("2.1", generic.codexDesktopAppAvailableVersion)
+        assertEquals(CodexDesktopAppState.CURRENT, generic.codexDesktopAppState)
+        assertFalse(generic.codexDesktopAppUpdateAvailable ?: true)
+        assertEquals(Instant.parse("2026-01-01T00:01:00Z"), generic.codexDesktopAppCheckedAt)
+
+        val legacy = feed.hosts.first { it.id == "legacy" }
+        assertEquals("1.9", legacy.codexDesktopAppVersion)
+        assertEquals("190", legacy.codexDesktopAppBuild)
+        assertTrue(legacy.codexDesktopAppUpdateAvailable == true)
+        assertEquals(null, legacy.codexDesktopAppState)
+        assertEquals(null, legacy.codexDesktopAppCheckedAt)
+        assertEquals(null, legacy.codexDesktopAppPlatform)
+        assertEquals(null, legacy.codexDesktopAppProvider)
+    }
+
+    @Test
+    fun desktopAppStateDistinguishesMissingUnknownAndLegacyCurrent() {
+        val feed = parser.parse(
+            """{
+              "schemaVersion": 1,
+              "generatedAt": "2026-01-01T00:00:00Z",
+              "hosts": [
+                {
+                  "id": "missing", "name": "Missing", "platform": "Linux",
+                  "codexDesktopAppState": "missing", "codexMacAppUpdateAvailable": true
+                },
+                {
+                  "id": "unknown", "name": "Unknown", "platform": "Linux",
+                  "codexDesktopAppProvider": "linux-apt",
+                  "codexDesktopAppState": null, "codexMacAppUpdateAvailable": false
+                },
+                {
+                  "id": "legacy-current", "name": "Legacy", "platform": "macOS",
+                  "codexMacAppUpdateAvailable": false
+                }
+              ]
+            }""",
+        )
+
+        val missing = feed.hosts.first { it.id == "missing" }
+        assertEquals(CodexDesktopAppState.MISSING, missing.codexDesktopAppState)
+        assertEquals(null, missing.codexDesktopAppUpdateAvailable)
+
+        val unknown = feed.hosts.first { it.id == "unknown" }
+        assertEquals(null, unknown.codexDesktopAppState)
+        assertEquals(null, unknown.codexDesktopAppUpdateAvailable)
+
+        val legacyCurrent = feed.hosts.first { it.id == "legacy-current" }
+        assertEquals(null, legacyCurrent.codexDesktopAppState)
+        assertTrue(legacyCurrent.codexDesktopAppUpdateAvailable == false)
     }
 
     @Test

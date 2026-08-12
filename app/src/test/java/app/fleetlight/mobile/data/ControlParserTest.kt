@@ -2,6 +2,7 @@ package app.fleetlight.mobile.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,9 +27,11 @@ class ControlParserTest {
               "activeJobId":"job-a",
               "capabilities":[{
                 "hostId":"host-a","hostName":"Workstation","state":"online",
-                "actions":["codex-cli","codex-mac-app","restart-linux","refresh-hosts"],
+                "actions":["codex-cli","codex-desktop-app","restart-linux","refresh-hosts"],
                 "codexCliUpdateAvailable":true,
-                "codexMacAppUpdateAvailable":false,
+                "codexDesktopAppState":"current",
+                "codexDesktopAppUpdateAvailable":false,
+                "codexDesktopAppCheckedAt":"2026-07-17T10:03:00Z",
                 "linuxUpdateAvailable":false,
                 "restartRequired":true
               }],
@@ -48,6 +51,13 @@ class ControlParserTest {
             status.actions,
         )
         assertTrue(status.capabilities.single().codexCliUpdateAvailable)
+        assertTrue(status.capabilities.single().hasCodexDesktopAppMetadata)
+        assertEquals(CodexDesktopAppState.CURRENT, status.capabilities.single().codexDesktopAppState)
+        assertTrue(status.capabilities.single().codexDesktopAppUpdateAvailable == false)
+        assertEquals(
+            Instant.parse("2026-07-17T10:03:00Z"),
+            status.capabilities.single().codexDesktopAppCheckedAt,
+        )
         assertTrue(status.capabilities.single().restartRequired)
 
         val job = parser.job(
@@ -123,7 +133,9 @@ class ControlParserTest {
     fun rejectsAvailableOperationsWithoutMatchingSupportAction() {
         listOf(
             "\"codexCliUpdateAvailable\":true" to "Codex CLI",
-            "\"codexMacAppUpdateAvailable\":true" to "Codex Mac app",
+            "\"codexDesktopAppUpdateAvailable\":true" to "ChatGPT Desktop App",
+            "\"codexDesktopAppState\":\"update-available\"" to "ChatGPT Desktop App",
+            "\"codexMacAppUpdateAvailable\":true" to "ChatGPT Desktop App",
             "\"linuxUpdateAvailable\":true" to "Linux OS",
             "\"restartRequired\":true" to "Linux restart",
         ).forEach { (field, label) ->
@@ -187,8 +199,8 @@ class ControlParserTest {
               "checkingUpdates":true,"activeCheckId":"check-a",
               "latestCodexCliVersion":"0.144.5","codexCliCheckedAt":"2026-07-17T10:00:00Z",
               "codexCliCheckFailed":false,
-              "latestCodexMacAppVersion":"26.715.21425","latestCodexMacAppBuild":"5488",
-              "codexMacAppCheckedAt":"2026-07-17T10:01:00Z","codexMacAppCheckFailed":true,
+              "latestCodexDesktopAppVersion":"26.715.21425","latestCodexDesktopAppBuild":"5488",
+              "codexDesktopAppCheckedAt":"2026-07-17T10:01:00Z","codexDesktopAppCheckFailed":true,
               "capabilities":[{
                 "hostId":"host-a","actions":["linux-os"],
                 "linuxCheckedAt":"2026-07-17T10:02:00Z"
@@ -200,9 +212,9 @@ class ControlParserTest {
         assertEquals("check-a", status.activeCheckId)
         assertEquals("0.144.5", status.latestCodexCliVersion)
         assertEquals(Instant.parse("2026-07-17T10:00:00Z"), status.codexCliCheckedAt)
-        assertEquals("26.715.21425", status.latestCodexMacAppVersion)
-        assertEquals("5488", status.latestCodexMacAppBuild)
-        assertTrue(status.codexMacAppCheckFailed)
+        assertEquals("26.715.21425", status.latestCodexDesktopAppVersion)
+        assertEquals("5488", status.latestCodexDesktopAppBuild)
+        assertTrue(status.codexDesktopAppCheckFailed)
         assertEquals(Instant.parse("2026-07-17T10:02:00Z"), status.capabilities.single().linuxCheckedAt)
 
         val legacy = parser.status(
@@ -211,6 +223,144 @@ class ControlParserTest {
         assertFalse(legacy.checkingUpdates)
         assertEquals(null, legacy.latestCodexCliVersion)
         assertEquals(null, legacy.capabilities.single().linuxCheckedAt)
+    }
+
+    @Test
+    fun genericDesktopStatusTakesPrecedenceWhileLegacyDesktopStatusStillDecodes() {
+        val generic = parser.status(
+            """{
+              "controllerId":"controller-a","commandAuthorityEnabled":true,
+              "latestCodexDesktopAppVersion":"2.0","latestCodexMacAppVersion":"legacy-wrong",
+              "latestCodexDesktopAppBuild":"200","latestCodexMacAppBuild":"legacy-build",
+              "codexDesktopAppCheckedAt":"2026-07-17T10:01:00Z",
+              "codexMacAppCheckedAt":"2026-07-16T10:01:00Z",
+              "codexDesktopAppCheckFailed":false,"codexMacAppCheckFailed":true,
+              "capabilities":[{
+                "hostId":"linux-a","actions":["codex-desktop-app"],
+                "codexDesktopAppState":"current",
+                "codexDesktopAppUpdateAvailable":false,"codexMacAppUpdateAvailable":true
+              }]
+            }""",
+        )
+
+        assertEquals("2.0", generic.latestCodexDesktopAppVersion)
+        assertEquals("200", generic.latestCodexDesktopAppBuild)
+        assertEquals(Instant.parse("2026-07-17T10:01:00Z"), generic.codexDesktopAppCheckedAt)
+        assertFalse(generic.codexDesktopAppCheckFailed)
+        assertEquals(CodexDesktopAppState.CURRENT, generic.capabilities.single().codexDesktopAppState)
+        assertTrue(generic.capabilities.single().codexDesktopAppUpdateAvailable == false)
+        assertTrue(ControlAction.CODEX_MAC_APP in generic.capabilities.single().actions)
+
+        val legacy = parser.status(
+            """{
+              "controllerId":"controller-a","commandAuthorityEnabled":true,
+              "latestCodexMacAppVersion":"1.9","latestCodexMacAppBuild":"190",
+              "codexMacAppCheckedAt":"2026-07-16T10:01:00Z","codexMacAppCheckFailed":true,
+              "capabilities":[{
+                "hostId":"mac-a","actions":["codex-mac-app"],"codexMacAppUpdateAvailable":true
+              }]
+            }""",
+        )
+
+        assertEquals("1.9", legacy.latestCodexDesktopAppVersion)
+        assertEquals("190", legacy.latestCodexDesktopAppBuild)
+        assertEquals(Instant.parse("2026-07-16T10:01:00Z"), legacy.codexDesktopAppCheckedAt)
+        assertTrue(legacy.codexDesktopAppCheckFailed)
+        assertTrue(legacy.capabilities.single().codexDesktopAppUpdateAvailable == true)
+
+        val genericUnknown = parser.status(
+            """{
+              "controllerId":"controller-a","commandAuthorityEnabled":true,
+              "latestCodexDesktopAppVersion":null,"latestCodexMacAppVersion":"legacy-wrong",
+              "latestCodexDesktopAppBuild":null,"latestCodexMacAppBuild":"legacy-build",
+              "codexDesktopAppCheckedAt":null,
+              "codexMacAppCheckedAt":"2026-07-16T10:01:00Z",
+              "codexDesktopAppCheckFailed":false,"codexMacAppCheckFailed":true,
+              "capabilities":[{"hostId":"linux-a","actions":["codex-mac-app"]}]
+            }""",
+        )
+
+        assertNull(genericUnknown.latestCodexDesktopAppVersion)
+        assertNull(genericUnknown.latestCodexDesktopAppBuild)
+        assertNull(genericUnknown.codexDesktopAppCheckedAt)
+        assertFalse(genericUnknown.codexDesktopAppCheckFailed)
+    }
+
+    @Test
+    fun genericDesktopMetadataPreservesUnknownAvailabilityInsteadOfUsingLegacyFalse() {
+        val status = parser.status(
+            """{
+              "controllerId":"controller-a","commandAuthorityEnabled":true,
+              "capabilities":[
+                {
+                  "hostId":"generic-null","actions":["codex-mac-app"],
+                  "codexDesktopAppPlatform":"Linux","codexDesktopAppProvider":"linux-apt",
+                  "codexDesktopAppVersion":"2.0","codexDesktopAppAvailableVersion":null,
+                  "codexDesktopAppUpdateAvailable":null,"codexMacAppUpdateAvailable":false,
+                  "codexDesktopAppCheckedAt":"2026-07-17T10:04:00Z"
+                },
+                {
+                  "hostId":"generic-missing","actions":["codex-mac-app"],
+                  "codexDesktopAppState":"missing",
+                  "codexMacAppUpdateAvailable":false
+                },
+                {
+                  "hostId":"generic-unknown","actions":["codex-mac-app"],
+                  "codexDesktopAppPlatform":"Linux","codexDesktopAppProvider":"linux-apt",
+                  "codexMacAppUpdateAvailable":false
+                },
+                {
+                  "hostId":"legacy-false","actions":["codex-mac-app"],
+                  "codexMacAppUpdateAvailable":false
+                }
+              ]
+            }""",
+        )
+
+        val genericNull = status.capabilities.first { it.hostId == "generic-null" }
+        assertTrue(genericNull.hasCodexDesktopAppMetadata)
+        assertEquals("Linux", genericNull.codexDesktopAppPlatform)
+        assertEquals("linux-apt", genericNull.codexDesktopAppProvider)
+        assertEquals("2.0", genericNull.codexDesktopAppVersion)
+        assertNull(genericNull.codexDesktopAppAvailableVersion)
+        assertNull(genericNull.codexDesktopAppUpdateAvailable)
+        assertEquals(Instant.parse("2026-07-17T10:04:00Z"), genericNull.codexDesktopAppCheckedAt)
+
+        val genericMissing = status.capabilities.first { it.hostId == "generic-missing" }
+        assertTrue(genericMissing.hasCodexDesktopAppMetadata)
+        assertEquals(CodexDesktopAppState.MISSING, genericMissing.codexDesktopAppState)
+        assertNull(genericMissing.codexDesktopAppUpdateAvailable)
+
+        val genericUnknown = status.capabilities.first { it.hostId == "generic-unknown" }
+        assertTrue(genericUnknown.hasCodexDesktopAppMetadata)
+        assertNull(genericUnknown.codexDesktopAppState)
+        assertNull(genericUnknown.codexDesktopAppUpdateAvailable)
+
+        val legacyFalse = status.capabilities.first { it.hostId == "legacy-false" }
+        assertFalse(legacyFalse.hasCodexDesktopAppMetadata)
+        assertTrue(legacyFalse.codexDesktopAppUpdateAvailable == false)
+        assertNull(legacyFalse.codexDesktopAppCheckedAt)
+    }
+
+    @Test
+    fun desktopAppStateParsesEveryWireValueAndDrivesUpdateAvailability() {
+        val states = listOf("current", "update-available", "missing", "offline", "unavailable", "future")
+        val capabilitiesJson = states.joinToString(",") { state ->
+            """{"hostId":"$state","actions":["codex-mac-app"],"codexDesktopAppState":"$state"}"""
+        }
+        val status = parser.status(
+            """{"controllerId":"controller-a","commandAuthorityEnabled":true,"capabilities":[$capabilitiesJson]}""",
+        )
+
+        assertEquals(CodexDesktopAppState.CURRENT, status.capabilities[0].codexDesktopAppState)
+        assertEquals(CodexDesktopAppState.UPDATE_AVAILABLE, status.capabilities[1].codexDesktopAppState)
+        assertEquals(CodexDesktopAppState.MISSING, status.capabilities[2].codexDesktopAppState)
+        assertEquals(CodexDesktopAppState.OFFLINE, status.capabilities[3].codexDesktopAppState)
+        assertEquals(CodexDesktopAppState.UNAVAILABLE, status.capabilities[4].codexDesktopAppState)
+        assertNull(status.capabilities[5].codexDesktopAppState)
+        assertEquals(listOf(false, true, false, false, false, false), status.capabilities.map {
+            it.updateAvailable(ControlAction.CODEX_MAC_APP)
+        })
     }
 
     @Test

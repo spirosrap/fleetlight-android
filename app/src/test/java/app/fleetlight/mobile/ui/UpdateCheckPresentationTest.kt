@@ -5,8 +5,12 @@ import app.fleetlight.mobile.data.ControlCheck
 import app.fleetlight.mobile.data.ControlCheckProgress
 import app.fleetlight.mobile.data.ControlCheckProgressState
 import app.fleetlight.mobile.data.ControlCheckState
+import app.fleetlight.mobile.data.ControlAction
+import app.fleetlight.mobile.data.ControlCapability
+import app.fleetlight.mobile.data.CodexDesktopAppState
 import app.fleetlight.mobile.data.FeedObserver
 import app.fleetlight.mobile.data.FleetSummary
+import app.fleetlight.mobile.data.FleetHost
 import app.fleetlight.mobile.data.MobileFeed
 import java.time.Instant
 import org.junit.Assert.assertEquals
@@ -16,6 +20,110 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UpdateCheckPresentationTest {
+    @Test
+    fun desktopAvailabilityPresentationKeepsUnknownDistinctFromCurrentAndNotInstalled() {
+        val action = ControlAction.CODEX_MAC_APP
+        val unknown = ControlCapability(
+            hostId = "unknown",
+            state = "online",
+            actions = setOf(action),
+            hasCodexDesktopAppMetadata = true,
+            codexDesktopAppPlatform = "Linux",
+            codexDesktopAppProvider = "linux-apt",
+            codexDesktopAppUpdateAvailable = null,
+        )
+        val available = unknown.copy(
+            hostId = "available",
+            codexDesktopAppVersion = "1.0",
+            codexDesktopAppAvailableVersion = "1.1",
+            codexDesktopAppState = CodexDesktopAppState.UPDATE_AVAILABLE,
+        )
+        val notInstalled = unknown.copy(
+            hostId = "not-installed",
+            codexDesktopAppState = CodexDesktopAppState.MISSING,
+        )
+        val offline = unknown.copy(hostId = "offline", codexDesktopAppState = CodexDesktopAppState.OFFLINE)
+        val unavailable = unknown.copy(
+            hostId = "unavailable",
+            codexDesktopAppState = CodexDesktopAppState.UNAVAILABLE,
+        )
+        val legacyCurrent = unknown.copy(
+            hostId = "legacy-current",
+            hasCodexDesktopAppMetadata = false,
+            codexDesktopAppPlatform = null,
+            codexDesktopAppProvider = null,
+            codexDesktopAppUpdateAvailable = false,
+        )
+        val supported = listOf(unknown, available, notInstalled, offline, unavailable, legacyCurrent)
+
+        assertEquals(
+            "1 update available · 1 check required · 1 not installed · 1 offline · 1 unavailable",
+            updateAvailabilitySummary(action, supported, supported, listOf(available)),
+        )
+        assertEquals("Update known", updateAllButtonLabel(action, supported, listOf(available)))
+        assertEquals("Check required", unknown.updateButtonLabel(action, null))
+        assertEquals("Check required", unknown.controllerUpdateReport(action))
+        assertEquals("Install", available.updateButtonLabel(action, null))
+        assertEquals(
+            "Available 1.1",
+            available.controllerUpdateReport(action, installedVersion = "Installed 1.0", availableVersion = "1.1"),
+        )
+        assertEquals("Not installed", notInstalled.updateButtonLabel(action, null))
+        assertEquals("Not installed", notInstalled.controllerUpdateReport(action))
+        assertEquals("Offline", offline.updateButtonLabel(action, null))
+        assertEquals("Desktop app check offline", offline.controllerUpdateReport(action))
+        assertEquals("Unavailable", unavailable.updateButtonLabel(action, null))
+        assertEquals("Desktop app unavailable", unavailable.controllerUpdateReport(action))
+        assertEquals("Current", legacyCurrent.updateButtonLabel(action, "Installed 1.0"))
+        assertEquals("Current", legacyCurrent.updateButtonLabel(action, null))
+        assertEquals("Controller reports current", legacyCurrent.controllerUpdateReport(action, "Installed 1.0"))
+    }
+
+    @Test
+    fun desktopPlatformCopyUsesReportedProviderPlatformThenHostFallback() {
+        val explicit = FleetHost(
+            id = "linux-a",
+            name = "Linux A",
+            platform = "GNU/Linux",
+            codexDesktopAppPlatform = "Linux",
+            codexDesktopAppProvider = "linux-apt",
+        )
+        val macFallback = FleetHost(
+            id = "mac-a",
+            name = "Mac A",
+            platform = "Darwin",
+            codexDesktopAppProvider = "macos-appcast",
+        )
+
+        assertEquals("Linux", explicit.desktopAppPlatformLabel)
+        assertEquals("OpenAI APT repository", explicit.desktopAppProviderLabel)
+        assertEquals("macOS", macFallback.desktopAppPlatformLabel)
+        assertEquals("Signed macOS appcast", macFallback.desktopAppProviderLabel)
+    }
+
+    @Test
+    fun desktopFreshnessPrefersCapabilityTimestampAndFallsBackToFeed() {
+        val action = ControlAction.CODEX_MAC_APP
+        val host = FleetHost(
+            id = "linux-a",
+            name = "Linux A",
+            codexDesktopAppCheckedAt = Instant.parse("2026-07-17T09:00:00Z"),
+        )
+        val capability = ControlCapability(
+            hostId = host.id,
+            codexDesktopAppCheckedAt = Instant.parse("2026-07-17T10:00:00Z"),
+        )
+        val now = Instant.parse("2026-07-17T10:05:00Z")
+
+        assertEquals("Checked 5m ago", desktopAppFreshnessLabel(action, capability, host, now))
+        assertEquals(
+            "Checked 1h ago",
+            desktopAppFreshnessLabel(action, capability.copy(codexDesktopAppCheckedAt = null), host, now),
+        )
+        assertNull(desktopAppFreshnessLabel(action, capability.copy(codexDesktopAppCheckedAt = null), null, now))
+        assertNull(desktopAppFreshnessLabel(ControlAction.CODEX_CLI, capability, host, now))
+    }
+
     @Test
     fun liveAuditShowsDeterminateStageProgressAndCurrentItem() {
         val presentation = checkProgressPresentation(

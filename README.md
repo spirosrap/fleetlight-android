@@ -26,7 +26,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - `fleetlight://configure` endpoint links without compiling private addresses into the app
 - Optional stable release signing from an ignored properties file or environment variables
 
-- Version: **1.14.1 (20)**
+- Version: **1.14.2 (21)**
 - Application ID: `app.fleetlight.mobile`
 - Minimum Android: 8.0 / API 26
 - Compile and target SDK: 36

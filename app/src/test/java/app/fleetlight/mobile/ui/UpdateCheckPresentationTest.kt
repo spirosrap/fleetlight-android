@@ -7,6 +7,7 @@ import app.fleetlight.mobile.data.ControlCheckProgressState
 import app.fleetlight.mobile.data.ControlCheckState
 import app.fleetlight.mobile.data.ControlAction
 import app.fleetlight.mobile.data.ControlCapability
+import app.fleetlight.mobile.data.ControlStatus
 import app.fleetlight.mobile.data.CodexDesktopAppState
 import app.fleetlight.mobile.data.FeedObserver
 import app.fleetlight.mobile.data.FleetSummary
@@ -20,6 +21,225 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UpdateCheckPresentationTest {
+    private val checkedAt = Instant.parse("2026-07-17T10:00:00Z")
+
+    @Test
+    fun updateCenterCountsActionableOperationsRatherThanMachines() {
+        val allAvailable = ControlCapability(
+            hostId = "all-available",
+            state = "online",
+            actions = setOf(
+                ControlAction.CODEX_CLI,
+                ControlAction.CODEX_MAC_APP,
+                ControlAction.LINUX_OS,
+                ControlAction.RESTART_LINUX,
+            ),
+            codexCliUpdateAvailable = true,
+            codexDesktopAppState = CodexDesktopAppState.UPDATE_AVAILABLE,
+            codexDesktopAppCheckedAt = checkedAt,
+            linuxUpdateAvailable = true,
+            restartRequired = true,
+            linuxCheckedAt = checkedAt,
+        )
+        val current = ControlCapability(
+            hostId = "current",
+            state = "online",
+            actions = setOf(ControlAction.CODEX_CLI, ControlAction.CODEX_MAC_APP),
+            codexDesktopAppState = CodexDesktopAppState.CURRENT,
+            codexDesktopAppCheckedAt = checkedAt,
+        )
+
+        val presentation = updateCenterPresentation(
+            status(listOf(allAvailable, current), codexCliCheckedAt = checkedAt),
+        )
+
+        assertEquals(3, presentation.actionableUpdateCount)
+        assertEquals(1, presentation.restartRequiredCount)
+        assertEquals(0, presentation.checkRequiredCount)
+        assertEquals(0, presentation.offlineCount)
+        assertEquals("3 updates available · 1 restart required", presentation.headline)
+    }
+
+    @Test
+    fun updateCenterKeepsOfflineUnknownUnavailableAndMissingDistinct() {
+        val offlineWithCachedUpdate = ControlCapability(
+            hostId = "offline",
+            state = "offline",
+            actions = setOf(ControlAction.CODEX_CLI),
+            codexCliUpdateAvailable = true,
+        )
+        val desktopCheckOffline = ControlCapability(
+            hostId = "desktop-offline",
+            state = "online",
+            actions = setOf(ControlAction.CODEX_MAC_APP),
+            codexDesktopAppState = CodexDesktopAppState.OFFLINE,
+        )
+        val unknownReachability = ControlCapability(
+            hostId = "unknown",
+            state = "unknown",
+            actions = setOf(ControlAction.LINUX_OS),
+        )
+        val unavailable = ControlCapability(
+            hostId = "unavailable",
+            state = "online",
+            actions = setOf(ControlAction.CODEX_MAC_APP),
+            codexDesktopAppState = CodexDesktopAppState.UNAVAILABLE,
+        )
+        val missing = ControlCapability(
+            hostId = "missing",
+            state = "online",
+            actions = setOf(ControlAction.CODEX_MAC_APP),
+            codexDesktopAppState = CodexDesktopAppState.MISSING,
+            codexDesktopAppCheckedAt = checkedAt,
+        )
+
+        val presentation = updateCenterPresentation(
+            status(
+                listOf(offlineWithCachedUpdate, desktopCheckOffline, unknownReachability, unavailable, missing),
+                codexCliCheckedAt = checkedAt,
+            ),
+        )
+
+        assertEquals(0, presentation.actionableUpdateCount)
+        assertEquals(0, presentation.restartRequiredCount)
+        assertEquals(2, presentation.checkRequiredCount)
+        assertEquals(2, presentation.offlineCount)
+        assertEquals(1, presentation.notInstalledCount)
+        assertEquals("2 checks needed · 2 offline · 1 not installed", presentation.headline)
+    }
+
+    @Test
+    fun updateCenterUsesEligibilityAndDeduplicatesControllerTargets() {
+        val unreachable = ControlCapability(
+            hostId = "same-host",
+            state = "unreachable",
+            actions = setOf(ControlAction.CODEX_CLI, ControlAction.RESTART_LINUX),
+            codexCliUpdateAvailable = true,
+            restartRequired = true,
+        )
+        val duplicate = unreachable.copy(hostName = "Duplicate")
+        val inconsistentWithoutAction = ControlCapability(
+            hostId = "no-action",
+            state = "online",
+            codexCliUpdateAvailable = true,
+            restartRequired = true,
+        )
+
+        val presentation = updateCenterPresentation(
+            status(
+                listOf(unreachable, duplicate, inconsistentWithoutAction),
+                codexCliCheckedAt = checkedAt,
+            ),
+        )
+
+        assertEquals(0, presentation.actionableUpdateCount)
+        assertEquals(0, presentation.restartRequiredCount)
+        assertEquals(1, presentation.offlineCount)
+        assertEquals("1 offline", presentation.headline)
+    }
+
+    @Test
+    fun updateCenterExplainsEmptyUnpairedAndCurrentStates() {
+        val unpaired = updateCenterPresentation(null)
+        val noTargets = updateCenterPresentation(status(emptyList()))
+        val current = updateCenterPresentation(
+            status(
+                listOf(
+                    ControlCapability(
+                        hostId = "current",
+                        state = "online",
+                        actions = setOf(ControlAction.CODEX_CLI, ControlAction.CODEX_MAC_APP),
+                        codexDesktopAppState = CodexDesktopAppState.CURRENT,
+                        codexDesktopAppCheckedAt = checkedAt,
+                    ),
+                ),
+                codexCliCheckedAt = checkedAt,
+            ),
+        )
+
+        assertEquals("Pair to load update status", unpaired.headline)
+        assertFalse(unpaired.hasManagedTargets)
+        assertEquals("No managed update targets", noTargets.headline)
+        assertEquals("All checked · no updates", current.headline)
+    }
+
+    @Test
+    fun updateCenterNeverTreatsMissingOrFailedCliFreshnessAsCurrent() {
+        val cli = ControlCapability(
+            hostId = "cli",
+            state = "online",
+            actions = setOf(ControlAction.CODEX_CLI),
+            codexCliUpdateAvailable = false,
+        )
+
+        val neverChecked = updateCenterPresentation(status(listOf(cli)))
+        val failedCachedCheck = updateCenterPresentation(
+            status(listOf(cli), codexCliCheckedAt = checkedAt, codexCliCheckFailed = true),
+        )
+        val verified = updateCenterPresentation(status(listOf(cli), codexCliCheckedAt = checkedAt))
+
+        assertEquals("1 check needed", neverChecked.headline)
+        assertEquals("1 check needed", failedCachedCheck.headline)
+        assertEquals("All checked · no updates", verified.headline)
+    }
+
+    @Test
+    fun updateCenterRequiresPerMachineLinuxAndDesktopEvidence() {
+        val linuxWithoutTimestamp = ControlCapability(
+            hostId = "linux",
+            state = "online",
+            actions = setOf(ControlAction.LINUX_OS, ControlAction.RESTART_LINUX),
+        )
+        val desktopWithoutTimestamp = ControlCapability(
+            hostId = "desktop",
+            state = "online",
+            actions = setOf(ControlAction.CODEX_MAC_APP),
+            codexDesktopAppState = CodexDesktopAppState.CURRENT,
+        )
+        val legacyDesktop = ControlCapability(
+            hostId = "legacy",
+            state = "online",
+            actions = setOf(ControlAction.CODEX_MAC_APP),
+            codexDesktopAppUpdateAvailable = false,
+        )
+
+        val incomplete = updateCenterPresentation(
+            status(listOf(linuxWithoutTimestamp, desktopWithoutTimestamp, legacyDesktop)),
+        )
+        val verified = updateCenterPresentation(
+            status(
+                listOf(
+                    linuxWithoutTimestamp.copy(linuxCheckedAt = checkedAt),
+                    desktopWithoutTimestamp.copy(codexDesktopAppCheckedAt = checkedAt),
+                ),
+            ),
+        )
+
+        assertEquals(3, incomplete.checkRequiredCount)
+        assertEquals("3 checks needed", incomplete.headline)
+        assertEquals("All checked · no updates", verified.headline)
+    }
+
+    @Test
+    fun updateCenterKeepsOfflineExclusiveEvenWhenFreshnessIsMissing() {
+        val offline = ControlCapability(
+            hostId = "offline",
+            state = "offline",
+            actions = setOf(
+                ControlAction.CODEX_CLI,
+                ControlAction.CODEX_MAC_APP,
+                ControlAction.LINUX_OS,
+                ControlAction.RESTART_LINUX,
+            ),
+        )
+
+        val presentation = updateCenterPresentation(status(listOf(offline)))
+
+        assertEquals(0, presentation.checkRequiredCount)
+        assertEquals(1, presentation.offlineCount)
+        assertEquals("1 offline", presentation.headline)
+    }
+
     @Test
     fun desktopAvailabilityPresentationKeepsUnknownDistinctFromCurrentAndNotInstalled() {
         val action = ControlAction.CODEX_MAC_APP
@@ -260,5 +480,18 @@ class UpdateCheckPresentationTest {
         linuxUpdates = emptyList(),
         incidents = emptyList(),
         metrics = emptyList(),
+    )
+
+    private fun status(
+        capabilities: List<ControlCapability>,
+        codexCliCheckedAt: Instant? = null,
+        codexCliCheckFailed: Boolean = false,
+    ) = ControlStatus(
+        observerId = "controller-a",
+        commandAuthorityEnabled = true,
+        jobJournalAvailable = true,
+        capabilities = capabilities,
+        codexCliCheckedAt = codexCliCheckedAt,
+        codexCliCheckFailed = codexCliCheckFailed,
     )
 }

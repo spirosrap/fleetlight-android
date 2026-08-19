@@ -13,6 +13,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - Native Insights tab with Now, 1h, 6h, and 24h fleet rankings for Ping, SSH-ready, Checks, and Full probe timing, including Speed or Change ordering, current-vs-previous badges, evidence counts, and truthful biggest-improvement/slowdown callouts
 - Cadence-aware gap-safe charts with shared tap-or-drag inspection for exact timestamps and values
 - Always-visible per-machine installed versions and availability for Codex CLI, ChatGPT Desktop App on macOS and Linux, and Linux OS, with individual Install or Update controls
+- Concise Update Center totals that keep actionable update operations, restart requests, offline machines, and machines needing a check distinct
 - Authenticated **Check all** audit with determinate stage progress on compatible controllers, exact latest Codex versions, check freshness, Linux verification coverage, and resilient process-death recovery
 - Sequential Update all for eligible updates, plus Linux restart controls that intentionally operate on exactly one machine at a time
 - Exact confirmation before every update or restart, durable job progress, partial-result reporting, and idempotent recovery
@@ -26,7 +27,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - `fleetlight://configure` endpoint links without compiling private addresses into the app
 - Optional stable release signing from an ignored properties file or environment variables
 
-- Version: **1.14.2 (21)**
+- Version: **1.15.0 (22)**
 - Application ID: `app.fleetlight.mobile`
 - Minimum Android: 8.0 / API 26
 - Compile and target SDK: 36

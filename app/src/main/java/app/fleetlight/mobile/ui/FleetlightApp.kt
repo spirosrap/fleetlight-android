@@ -99,6 +99,7 @@ import app.fleetlight.mobile.data.ControlCheckState
 import app.fleetlight.mobile.data.ControlEndpointPolicy
 import app.fleetlight.mobile.data.ControlJob
 import app.fleetlight.mobile.data.ControlJobState
+import app.fleetlight.mobile.data.ControlStatus
 import app.fleetlight.mobile.data.CodexDesktopAppState
 import app.fleetlight.mobile.data.FeedObserver
 import app.fleetlight.mobile.data.FleetHost
@@ -1836,6 +1837,7 @@ private fun UpdatesScreen(
 private fun UpdateCheckCard(state: FleetUiState, onCheckForUpdates: () -> Unit) {
     val status = state.controlStatus
     val localCheck = state.activeCheck
+    val updateCenter = updateCenterPresentation(status)
     val running = state.updateCheckSubmitting || localCheck?.state?.isTerminal == false || status?.checkingUpdates == true
     val canCheck = state.connection == FeedConnection.LIVE &&
         status?.commandAuthorityEnabled == true &&
@@ -1853,22 +1855,30 @@ private fun UpdateCheckCard(state: FleetUiState, onCheckForUpdates: () -> Unit) 
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Check all", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Update Center", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     Text(
-                        when {
-                            state.updateCheckSubmitting -> "Starting a live check…"
-                            localCheck?.state == ControlCheckState.QUEUED -> "Live check queued${localCheck.phase.asPhaseSuffix()}"
-                            localCheck?.state == ControlCheckState.RUNNING -> "Checking${localCheck.phase.asPhaseSuffix()}"
-                            status?.checkingUpdates == true -> "Controller is checking…"
-                            localCheck?.state == ControlCheckState.SUCCEEDED -> "Live check complete"
-                            localCheck?.state == ControlCheckState.PARTIAL -> "Check complete with some failures"
-                            localCheck?.state == ControlCheckState.FAILED -> "Live check failed"
-                            localCheck?.state == ControlCheckState.CANCELLED -> "Live check cancelled"
-                            else -> "Audit installed versions, Linux packages, and available releases; the top refresh only reloads the snapshot"
-                        },
+                        updateCenter.headline,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    val checkStatus = when {
+                        state.updateCheckSubmitting -> "Starting a live check…"
+                        localCheck?.state == ControlCheckState.QUEUED -> "Live check queued${localCheck.phase.asPhaseSuffix()}"
+                        localCheck?.state == ControlCheckState.RUNNING -> "Checking${localCheck.phase.asPhaseSuffix()}"
+                        status?.checkingUpdates == true -> "Controller is checking…"
+                        localCheck?.state == ControlCheckState.SUCCEEDED -> "Live check complete"
+                        localCheck?.state == ControlCheckState.PARTIAL -> "Check complete with some failures"
+                        localCheck?.state == ControlCheckState.FAILED -> "Live check failed"
+                        localCheck?.state == ControlCheckState.CANCELLED -> "Live check cancelled"
+                        else -> null
+                    }
+                    checkStatus?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 FilledTonalButton(onClick = onCheckForUpdates, enabled = canCheck) {
                     if (running) {
@@ -1944,6 +1954,88 @@ private fun UpdateCheckCard(state: FleetUiState, onCheckForUpdates: () -> Unit) 
             }
         }
     }
+}
+
+internal data class UpdateCenterPresentation(
+    val actionableUpdateCount: Int,
+    val restartRequiredCount: Int,
+    val checkRequiredCount: Int,
+    val offlineCount: Int,
+    val notInstalledCount: Int,
+    val hasManagedTargets: Boolean,
+    val controllerAvailable: Boolean,
+) {
+    val headline: String
+        get() {
+            if (!controllerAvailable) return "Pair to load update status"
+            if (!hasManagedTargets) return "No managed update targets"
+            val parts = buildList {
+                if (actionableUpdateCount > 0) {
+                    add("$actionableUpdateCount update${if (actionableUpdateCount == 1) "" else "s"} available")
+                }
+                if (restartRequiredCount > 0) {
+                    add("$restartRequiredCount restart${if (restartRequiredCount == 1) "" else "s"} required")
+                }
+                if (checkRequiredCount > 0) {
+                    add("$checkRequiredCount check${if (checkRequiredCount == 1) "" else "s"} needed")
+                }
+                if (offlineCount > 0) add("$offlineCount offline")
+                if (notInstalledCount > 0) add("$notInstalledCount not installed")
+            }
+            return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "All checked · no updates"
+        }
+}
+
+internal fun updateCenterPresentation(status: ControlStatus?): UpdateCenterPresentation {
+    val capabilities = status?.capabilities.orEmpty()
+    val uniqueCapabilities = capabilities.distinctBy(ControlCapability::hostId)
+    val managed = uniqueCapabilities.filter { capability ->
+        capability.actions.any { action -> action.isUpdate || action == ControlAction.RESTART_LINUX }
+    }
+    val actionableUpdates = managed.sumOf { capability ->
+        ControlAction.entries.count { action -> action.isUpdate && capability.eligibleFor(action) }
+    }
+    val restartRequired = managed.count { it.eligibleFor(ControlAction.RESTART_LINUX) }
+    var checkRequired = 0
+    var offline = 0
+    var notInstalled = 0
+    managed.forEach { capability ->
+        val supportsDesktopApp = ControlAction.CODEX_MAC_APP in capability.actions
+        val supportsCli = ControlAction.CODEX_CLI in capability.actions
+        val supportsLinuxStatus = ControlAction.LINUX_OS in capability.actions ||
+            ControlAction.RESTART_LINUX in capability.actions
+        val explicitlyOffline = capability.state.trim().lowercase() in setOf("offline", "unreachable", "down")
+        val desktopCheckOffline = supportsDesktopApp &&
+            capability.codexDesktopAppState == CodexDesktopAppState.OFFLINE
+        val cliFresh = !supportsCli ||
+            (status?.codexCliCheckedAt != null && !status.codexCliCheckFailed)
+        val linuxFresh = !supportsLinuxStatus || capability.linuxCheckedAt != null
+        val desktopFresh = !supportsDesktopApp || (
+            capability.codexDesktopAppCheckedAt != null &&
+                capability.codexDesktopAppState in setOf(
+                    CodexDesktopAppState.CURRENT,
+                    CodexDesktopAppState.UPDATE_AVAILABLE,
+                    CodexDesktopAppState.MISSING,
+                )
+            )
+        val needsCheck = (!capability.commandReachable && !explicitlyOffline) ||
+            !cliFresh || !linuxFresh || !desktopFresh
+        when {
+            explicitlyOffline || desktopCheckOffline -> offline += 1
+            needsCheck -> checkRequired += 1
+            supportsDesktopApp && capability.codexDesktopAppState == CodexDesktopAppState.MISSING ->
+                notInstalled += 1
+        }
+    }
+    return UpdateCenterPresentation(
+        actionableUpdateCount = actionableUpdates,
+        restartRequiredCount = restartRequired,
+        checkRequiredCount = checkRequired,
+        offlineCount = offline,
+        notInstalledCount = notInstalled,
+        hasManagedTargets = managed.isNotEmpty(),
+        controllerAvailable = status != null,
+    )
 }
 
 @Composable

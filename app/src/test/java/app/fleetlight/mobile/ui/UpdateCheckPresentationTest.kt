@@ -471,6 +471,18 @@ class UpdateCheckPresentationTest {
         assertNull(incomplete.oldestCheckedAt)
     }
 
+    @Test
+    fun linuxStateLabelsSeparateConnectivityFromPackageStatus() {
+        assertEquals("Packages current", linuxUpdateStateLabel("current"))
+        assertEquals("Updates available", linuxUpdateStateLabel("updateAvailable"))
+        assertEquals("Offline", linuxUpdateStateLabel("offline"))
+        assertEquals("Access issue", linuxUpdateStateLabel("accessIssue"))
+        assertEquals("Checking connection", linuxUpdateStateLabel("connectionChecking"))
+        assertEquals("Checking packages", linuxUpdateStateLabel("packageChecking"))
+        assertEquals("Checking packages", linuxUpdateStateLabel("checking"))
+        assertEquals("Package check stale", linuxUpdateStateLabel("packageStale"))
+    }
+
     private fun feed(observer: String, timestamp: String) = MobileFeed(
         schemaVersion = 1,
         generatedAt = Instant.parse(timestamp),

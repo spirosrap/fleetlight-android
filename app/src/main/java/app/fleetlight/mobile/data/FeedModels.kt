@@ -142,6 +142,82 @@ data class LinuxUpdate(
     val checkedAt: Instant? = null,
 )
 
+fun MobileFeed.withReconciledLinuxReachability(): MobileFeed {
+    val linuxHostIds = linuxUpdates.mapTo(mutableSetOf(), LinuxUpdate::hostId)
+    val reconciledHosts = hosts.map { host ->
+        if (host.id !in linuxHostIds) return@map host
+        when (host.state) {
+            HostState.OFFLINE, HostState.ACCESS, HostState.UNKNOWN -> host.copy(
+                issueTypes = host.issueTypes.filterNot { issue ->
+                    issue.normalizedLinuxUpdateState() in LIVE_UNREACHABLE_LINUX_ISSUE_TYPES
+                },
+                restartRequired = false,
+            )
+            HostState.ONLINE, HostState.SLOW, HostState.ATTENTION -> host
+        }
+    }
+    val hostsById = reconciledHosts.associateBy(FleetHost::id)
+    val reconciledUpdates = linuxUpdates.map { update ->
+        when (hostsById[update.hostId]?.state) {
+            HostState.OFFLINE -> update.copy(
+                state = "offline",
+                detail = "Machine offline · showing the last package check",
+                availableCount = 0,
+                restartRequired = false,
+            )
+            HostState.ACCESS -> update.copy(
+                state = "accessIssue",
+                detail = "Monitoring access issue · showing the last package check",
+                availableCount = 0,
+                restartRequired = false,
+            )
+            HostState.UNKNOWN -> update.copy(
+                state = "connectionChecking",
+                detail = "Checking machine connection · showing the last package check",
+                availableCount = 0,
+                restartRequired = false,
+            )
+            HostState.ONLINE, HostState.SLOW, HostState.ATTENTION -> when (
+                update.state.normalizedLinuxUpdateState()
+            ) {
+                "offline", "packagestale" -> update.copy(
+                    state = "packageStale",
+                    availableCount = 0,
+                    restartRequired = false,
+                )
+                "checking", "packagechecking" -> update.copy(
+                    state = "packageChecking",
+                    availableCount = 0,
+                )
+                else -> update
+            }
+            null -> update
+        }
+    }
+    return copy(
+        hosts = reconciledHosts,
+        linuxUpdates = reconciledUpdates,
+        summary = summary.copy(
+            updatesAvailable = reconciledUpdates.count {
+                it.availableCount > 0 && it.state.normalizedLinuxUpdateState() in LINUX_UPDATE_AVAILABLE_STATES
+            },
+            restartRequired = reconciledUpdates.count(LinuxUpdate::restartRequired),
+        ),
+    )
+}
+
+private fun String.normalizedLinuxUpdateState(): String =
+    trim().lowercase().replace("-", "").replace("_", "")
+
+private val LINUX_UPDATE_AVAILABLE_STATES = setOf("updateavailable", "updatesavailable")
+private val LIVE_UNREACHABLE_LINUX_ISSUE_TYPES = setOf(
+    "update",
+    "updates",
+    "updatesavailable",
+    "restart",
+    "restartrequired",
+)
+
 data class FleetIncident(
     val id: String,
     val hostId: String? = null,

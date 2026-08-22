@@ -46,7 +46,7 @@ class FeedParser(
             incidents = root.array("incidents").mapIndexedNotNull(::parseIncident),
             metrics = root.array("metrics").mapIndexedNotNull(::parseMetric),
             timingComparisons = root.array("timingComparisons").mapNotNull(::parseTimingComparison),
-        ).withDerivedSummary()
+        ).withReconciledLinuxReachability().withDerivedSummary()
     }
 
     private fun parseObserver(element: JsonElement?): FeedObserver {

@@ -2467,7 +2467,9 @@ private fun ControlMessageCard(text: String, error: Boolean = false) {
 
 @Composable
 private fun UpdateCard(update: LinuxUpdate) {
-    val needsAttention = update.restartRequired || update.availableCount > 0 || update.state.lowercase() in setOf("failed", "error", "offline")
+    val normalizedState = update.state.trim().lowercase().replace("-", "").replace("_", "")
+    val needsAttention = update.restartRequired || update.availableCount > 0 ||
+        normalizedState in setOf("failed", "error", "offline", "accessissue", "packagestale")
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2481,7 +2483,7 @@ private fun UpdateCard(update: LinuxUpdate) {
                     Text(update.hostName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
                         buildList {
-                            add(update.state.replaceFirstChar(Char::uppercase))
+                            add(linuxUpdateStateLabel(update.state))
                             update.packageManager?.let(::add)
                         }.joinToString(" · "),
                         style = MaterialTheme.typography.bodyMedium,
@@ -2499,6 +2501,21 @@ private fun UpdateCard(update: LinuxUpdate) {
             }
         }
     }
+}
+
+internal fun linuxUpdateStateLabel(state: String): String = when (
+    state.trim().lowercase().replace("-", "").replace("_", "")
+) {
+    "current" -> "Packages current"
+    "updateavailable", "updatesavailable" -> "Updates available"
+    "offline" -> "Offline"
+    "accessissue" -> "Access issue"
+    "connectionchecking" -> "Checking connection"
+    "checking", "packagechecking" -> "Checking packages"
+    "packagestale" -> "Package check stale"
+    "notchecked" -> "Not checked"
+    "failed", "error" -> "Check failed"
+    else -> state.replaceFirstChar(Char::uppercase)
 }
 
 @Composable

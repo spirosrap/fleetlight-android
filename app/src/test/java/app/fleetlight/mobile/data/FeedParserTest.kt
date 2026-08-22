@@ -60,6 +60,95 @@ class FeedParserTest {
     }
 
     @Test
+    fun liveReachabilityOverridesCachedLinuxPackageState() {
+        val feed = parser.parse(
+            """{
+              "schemaVersion": 1,
+              "generatedAt": "2026-08-22T10:00:00Z",
+              "summary": {"total": 4, "online": 1, "offline": 2, "accessIssues": 1, "updatesAvailable": 3, "restartRequired": 3},
+              "hosts": [
+                {"id": "offline", "name": "Offline", "state": "offline", "issueTypes": ["offline", "updates", "restart"], "restartRequired": true},
+                {"id": "access", "name": "Access", "state": "access", "issueTypes": ["access", "updates", "restart"], "restartRequired": true},
+                {"id": "online", "name": "Online", "state": "online", "issueTypes": ["updates", "restart"], "restartRequired": true},
+                {"id": "desktop", "name": "Desktop", "state": "offline", "issueTypes": ["offline", "updates"]}
+              ],
+              "linuxUpdates": [
+                {"hostId": "offline", "hostName": "Offline", "state": "updateAvailable", "availableCount": 2, "restartRequired": true},
+                {"hostId": "access", "hostName": "Access", "state": "current", "restartRequired": true},
+                {"hostId": "online", "hostName": "Online", "state": "updateAvailable", "availableCount": 4, "restartRequired": true}
+              ]
+            }""",
+        )
+
+        val offline = feed.linuxUpdates.first { it.hostId == "offline" }
+        assertEquals("offline", offline.state)
+        assertEquals(0, offline.availableCount)
+        assertFalse(offline.restartRequired)
+        assertTrue(offline.detail?.contains("last package check") == true)
+        val offlineHost = feed.hosts.first { it.id == "offline" }
+        assertFalse(offlineHost.restartRequired)
+        assertEquals(listOf("offline"), offlineHost.issueTypes)
+
+        val access = feed.linuxUpdates.first { it.hostId == "access" }
+        assertEquals("accessIssue", access.state)
+        assertFalse(access.restartRequired)
+        val accessHost = feed.hosts.first { it.id == "access" }
+        assertFalse(accessHost.restartRequired)
+        assertEquals(listOf("access"), accessHost.issueTypes)
+
+        val online = feed.linuxUpdates.first { it.hostId == "online" }
+        assertEquals("updateAvailable", online.state)
+        assertEquals(4, online.availableCount)
+        assertTrue(online.restartRequired)
+        val onlineHost = feed.hosts.first { it.id == "online" }
+        assertTrue(onlineHost.restartRequired)
+        assertEquals(listOf("updates", "restart"), onlineHost.issueTypes)
+        val desktopHost = feed.hosts.first { it.id == "desktop" }
+        assertEquals(listOf("offline", "updates"), desktopHost.issueTypes)
+        assertEquals(1, feed.summary.updatesAvailable)
+        assertEquals(1, feed.summary.restartRequired)
+    }
+
+    @Test
+    fun recoveredPackageStatesStayDistinctFromConnectionChecking() {
+        val feed = parser.parse(
+            """{
+              "schemaVersion": 1,
+              "generatedAt": "2026-08-22T10:00:00Z",
+              "hosts": [
+                {"id": "pending", "name": "Pending", "state": "unknown", "issueTypes": ["updates", "restart"], "restartRequired": true},
+                {"id": "recovered", "name": "Recovered", "state": "online"},
+                {"id": "checking", "name": "Checking", "state": "online"}
+              ],
+              "linuxUpdates": [
+                {"hostId": "pending", "hostName": "Pending", "state": "current", "availableCount": 2, "restartRequired": true},
+                {"hostId": "recovered", "hostName": "Recovered", "state": "offline", "availableCount": 3, "restartRequired": true},
+                {"hostId": "checking", "hostName": "Checking", "state": "checking", "availableCount": 4}
+              ]
+            }""",
+        )
+
+        val pending = feed.linuxUpdates.first { it.hostId == "pending" }
+        assertEquals("connectionChecking", pending.state)
+        assertEquals(0, pending.availableCount)
+        assertFalse(pending.restartRequired)
+        val pendingHost = feed.hosts.first { it.id == "pending" }
+        assertFalse(pendingHost.restartRequired)
+        assertTrue(pendingHost.issueTypes.isEmpty())
+
+        val recovered = feed.linuxUpdates.first { it.hostId == "recovered" }
+        assertEquals("packageStale", recovered.state)
+        assertEquals(0, recovered.availableCount)
+        assertFalse(recovered.restartRequired)
+
+        val checking = feed.linuxUpdates.first { it.hostId == "checking" }
+        assertEquals("packageChecking", checking.state)
+        assertEquals(0, checking.availableCount)
+        assertEquals(0, feed.summary.updatesAvailable)
+        assertEquals(0, feed.summary.restartRequired)
+    }
+
+    @Test
     fun toleratesMissingOptionalFieldsAndUnknownFields() {
         val feed = parser.parse(
             """{

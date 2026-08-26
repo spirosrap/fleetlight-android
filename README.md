@@ -22,12 +22,13 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - Read-only status and Events remain available without command pairing
 - Up to four runtime-configured HTTPS endpoints; the freshest valid schema 1 response wins
 - Lightweight fleet-snapshot refresh every 60 seconds, manual snapshot refresh, serialized crash-safe atomic last-good caching, and clear stale/offline state
+- Controller-owned machine membership, so additions and confirmed removals from the Mac machine manager appear automatically after the next verified live feed
 - Safe retry of transient controller timeouts and rate limits using the original idempotency identity
 - Failure-isolated controller notices, so a healthy fallback feed stays live while an unavailable paired update controller is explained only in Updates and Settings
 - `fleetlight://configure` endpoint links without compiling private addresses into the app
 - Optional stable release signing from an ignored properties file or environment variables
 
-- Version: **1.15.2 (24)**
+- Version: **1.15.3 (25)**
 - Application ID: `app.fleetlight.mobile`
 - Minimum Android: 8.0 / API 26
 - Compile and target SDK: 36

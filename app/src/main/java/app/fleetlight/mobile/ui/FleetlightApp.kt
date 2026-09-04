@@ -2983,6 +2983,7 @@ internal val FleetHost.desktopAppProviderLabel: String?
         return when {
             raw.equals("macos-appcast", ignoreCase = true) -> "Signed macOS appcast"
             raw.equals("linux-apt", ignoreCase = true) -> "OpenAI APT repository"
+            raw.equals("linux-pacman", ignoreCase = true) -> "Configured pacman repository"
             else -> raw.take(80)
         }
     }

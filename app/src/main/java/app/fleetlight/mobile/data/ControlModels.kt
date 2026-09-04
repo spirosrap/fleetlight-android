@@ -318,6 +318,7 @@ data class PendingControlAction(
     val action: ControlAction,
     val targetHostIds: List<String>,
     val targetHostNames: List<String>,
+    val includesPacmanSystemUpgrade: Boolean = false,
 )
 
 data class ControlConfirmationCopy(
@@ -346,8 +347,12 @@ fun PendingControlAction.confirmationCopy(): ControlConfirmationCopy {
     }
     val warning = when (action) {
         ControlAction.CODEX_CLI -> "Active Codex CLI sessions may be interrupted."
-        ControlAction.CODEX_MAC_APP ->
+        ControlAction.CODEX_MAC_APP -> if (includesPacmanSystemUpgrade) {
+            "The ChatGPT Desktop App may close and reopen while updating. On Arch Linux, " +
+                "this runs a full pacman system upgrade, so other packages may also update."
+        } else {
             "The ChatGPT Desktop App may close and reopen on macOS or Linux while updating."
+        }
         ControlAction.LINUX_OS -> "Packages will update sequentially. Machines will not reboot automatically."
         ControlAction.RESTART_LINUX -> error("Handled above")
         ControlAction.REFRESH_HOSTS -> error("Handled above")

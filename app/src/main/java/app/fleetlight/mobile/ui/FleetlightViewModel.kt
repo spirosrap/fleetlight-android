@@ -355,6 +355,10 @@ class FleetlightViewModel(
                 action = action,
                 targetHostIds = eligible.map { it.hostId },
                 targetHostNames = eligible.map { it.safeHostName() },
+                includesPacmanSystemUpgrade = action == ControlAction.CODEX_MAC_APP &&
+                    eligible.any {
+                        it.codexDesktopAppProvider.equals("linux-pacman", ignoreCase = true)
+                    },
             ),
             controlError = null,
         )

@@ -90,6 +90,19 @@ class ControlActionPolicyTest {
     }
 
     @Test
+    fun desktopAppPacmanConfirmationWarnsAboutFullSystemUpgrade() {
+        val copy = PendingControlAction(
+            action = ControlAction.CODEX_MAC_APP,
+            targetHostIds = listOf("host-arch"),
+            targetHostNames = listOf("Arch Workstation"),
+            includesPacmanSystemUpgrade = true,
+        ).confirmationCopy()
+
+        assertTrue(copy.description.contains("full pacman system upgrade"))
+        assertTrue(copy.description.contains("other packages may also update"))
+    }
+
+    @Test
     fun desktopAppUnknownAvailabilityIsNeverEligibleOrTreatedAsCurrent() {
         val unknown = capability(
             actions = setOf(ControlAction.CODEX_MAC_APP),

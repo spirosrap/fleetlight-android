@@ -314,11 +314,17 @@ class UpdateCheckPresentationTest {
             platform = "Darwin",
             codexDesktopAppProvider = "macos-appcast",
         )
+        val pacman = explicit.copy(
+            id = "arch-a",
+            name = "Arch A",
+            codexDesktopAppProvider = "linux-pacman",
+        )
 
         assertEquals("Linux", explicit.desktopAppPlatformLabel)
         assertEquals("OpenAI APT repository", explicit.desktopAppProviderLabel)
         assertEquals("macOS", macFallback.desktopAppPlatformLabel)
         assertEquals("Signed macOS appcast", macFallback.desktopAppProviderLabel)
+        assertEquals("Configured pacman repository", pacman.desktopAppProviderLabel)
     }
 
     @Test

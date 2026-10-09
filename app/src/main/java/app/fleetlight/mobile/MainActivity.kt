@@ -15,6 +15,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.fleetlight.mobile.data.EndpointPolicy
 import app.fleetlight.mobile.data.ControlEndpointPolicy
 import app.fleetlight.mobile.data.PendingPairing
+import app.fleetlight.mobile.ui.FleetViewPreferences
 import app.fleetlight.mobile.ui.FleetlightApp
 import app.fleetlight.mobile.ui.FleetlightViewModel
 import app.fleetlight.mobile.ui.theme.AppearancePreferences
@@ -36,6 +37,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             val appearance = remember { AppearancePreferences.get(applicationContext) }
             val appearanceSettings by appearance.settings.collectAsStateWithLifecycle()
+            val fleetView = remember { FleetViewPreferences.get(applicationContext) }
+            val fleetViewSettings by fleetView.settings.collectAsStateWithLifecycle()
             val darkTheme = when (appearanceSettings.themeMode) {
                 ThemeMode.SYSTEM -> isSystemInDarkTheme()
                 ThemeMode.LIGHT -> false
@@ -57,6 +60,8 @@ class MainActivity : ComponentActivity() {
                     viewModel = model,
                     appearance = appearanceSettings,
                     onAppearanceChange = appearance::update,
+                    fleetView = fleetViewSettings,
+                    onFleetViewChange = fleetView::update,
                 )
             }
         }

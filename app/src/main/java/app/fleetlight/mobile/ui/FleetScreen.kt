@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,7 +29,9 @@ import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Share
@@ -76,16 +78,23 @@ import kotlin.math.roundToInt
 internal enum class FleetFilter(val label: String) {
     ALL("All"),
     ISSUES("Issues"),
-    PINNED("Pinned"),
     MACOS("macOS"),
     LINUX("Linux"),
 }
 
-internal enum class FleetSort(val label: String) {
+internal class ReorderControls(
+    val canMoveUp: Boolean,
+    val canMoveDown: Boolean,
+    val onMoveUp: () -> Unit,
+    val onMoveDown: () -> Unit,
+)
+
+enum class FleetSort(val label: String) {
     PRIORITY("Priority"),
     NAME("Name"),
     LATENCY("Latency"),
     HEALTH("Health"),
+    CUSTOM("Custom"),
 }
 
 internal val FleetHost.hasIssue: Boolean
@@ -100,7 +109,6 @@ internal val FleetHost.isLinux: Boolean
 internal fun FleetFilter.matches(host: FleetHost): Boolean = when (this) {
     FleetFilter.ALL -> true
     FleetFilter.ISSUES -> host.hasIssue
-    FleetFilter.PINNED -> host.isPinned
     FleetFilter.MACOS -> host.isMacOS
     FleetFilter.LINUX -> host.isLinux
 }
@@ -115,16 +123,34 @@ internal fun hostMatchesQuery(host: FleetHost, query: String): Boolean {
         host.issueTypes.any { it.lowercase().contains(needle) }
 }
 
-/** Search, filter and sort the fleet. Priority keeps the pinned-first, issues-first order. */
+/** Search, filter and sort the fleet. Priority is issues first; Custom follows a hand-made order kept on the phone. */
+/** Machines in the saved order first; anything the order does not know yet follows in priority order. */
+internal fun customOrderedHosts(hosts: List<FleetHost>, order: List<String>): List<FleetHost> {
+    val position = order.withIndex().associate { (index, id) -> id to index }
+    val known = hosts.filter { it.id in position }.sortedBy { position.getValue(it.id) }
+    val unknown = prioritizedFleetHosts(hosts.filter { it.id !in position })
+    return known + unknown
+}
+
+/** The order after moving one machine up (delta -1) or down (delta +1) within the shown list. */
+internal fun movedOrder(shownIds: List<String>, hostId: String, delta: Int): List<String> {
+    val index = shownIds.indexOf(hostId)
+    val target = index + delta
+    if (index < 0 || target < 0 || target >= shownIds.size) return shownIds
+    return shownIds.toMutableList().also { it[index] = it[target]; it[target] = hostId }
+}
+
 internal fun filterFleetHosts(
     hosts: List<FleetHost>,
     query: String = "",
     filter: FleetFilter = FleetFilter.ALL,
     sort: FleetSort = FleetSort.PRIORITY,
+    customOrder: List<String> = emptyList(),
 ): List<FleetHost> {
     val filtered = hosts.filter { filter.matches(it) && hostMatchesQuery(it, query) }
     return when (sort) {
         FleetSort.PRIORITY -> prioritizedFleetHosts(filtered)
+        FleetSort.CUSTOM -> customOrderedHosts(filtered, customOrder)
         FleetSort.NAME -> filtered.sortedBy { it.name.lowercase() }
         FleetSort.LATENCY -> filtered.sortedWith(
             compareBy<FleetHost>({ it.pingMs == null }, { it.pingMs ?: 0.0 }, { it.name.lowercase() }),
@@ -142,6 +168,8 @@ internal fun FleetScreen(
     onHostClick: (FleetHost) -> Unit,
     onRecheckHosts: (List<String>) -> Unit,
     onRefresh: () -> Unit,
+    fleetView: FleetViewSettings = FleetViewSettings(),
+    onFleetViewChange: ((FleetViewSettings) -> FleetViewSettings) -> Unit = {},
 ) {
     val feed = state.feed
     if (feed == null) {
@@ -154,8 +182,33 @@ internal fun FleetScreen(
     }
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(FleetFilter.ALL) }
-    var sort by rememberSaveable { mutableStateOf(FleetSort.PRIORITY) }
-    val visibleHosts = remember(feed.hosts, query, filter, sort) { filterFleetHosts(feed.hosts, query, filter, sort) }
+    var reordering by rememberSaveable { mutableStateOf(false) }
+    val sort = if (reordering) FleetSort.CUSTOM else fleetView.sort
+    val effectiveQuery = if (reordering) "" else query
+    val effectiveFilter = if (reordering) FleetFilter.ALL else filter
+    val visibleHosts = remember(feed.hosts, effectiveQuery, effectiveFilter, sort, fleetView.order) {
+        filterFleetHosts(feed.hosts, effectiveQuery, effectiveFilter, sort, fleetView.order)
+    }
+    val shownIds = visibleHosts.map(FleetHost::id)
+    fun selectSort(candidate: FleetSort) {
+        onFleetViewChange { current ->
+            // Switching to Custom starts from what is on screen, so nothing jumps.
+            val seeded = if (candidate == FleetSort.CUSTOM && current.order.isEmpty()) {
+                filterFleetHosts(feed.hosts, sort = current.sort).map(FleetHost::id)
+            } else {
+                current.order
+            }
+            current.copy(sort = candidate, order = seeded)
+        }
+    }
+    fun toggleReorder() {
+        if (!reordering) selectSort(FleetSort.CUSTOM)
+        reordering = !reordering
+    }
+    fun move(hostId: String, delta: Int) {
+        val next = movedOrder(shownIds, hostId, delta)
+        onFleetViewChange { it.copy(sort = FleetSort.CUSTOM, order = next) }
+    }
     val filterCounts = remember(feed.hosts) {
         FleetFilter.entries.associateWith { candidate -> feed.hosts.count { candidate.matches(it) } }
     }
@@ -207,7 +260,9 @@ internal fun FleetScreen(
                     onFilterChange = { filter = it },
                     filterCounts = filterCounts,
                     sort = sort,
-                    onSortChange = { sort = it },
+                    onSortChange = ::selectSort,
+                    reordering = reordering,
+                    onToggleReorder = ::toggleReorder,
                     visibleCount = visibleHosts.size,
                     totalCount = feed.hosts.size,
                 )
@@ -219,7 +274,7 @@ internal fun FleetScreen(
                     )
                 }
             } else {
-                items(visibleHosts, key = FleetHost::id) { host ->
+                itemsIndexed(visibleHosts, key = { _, host -> host.id }) { index, host ->
                     val capability = recheckCapabilities[host.id]
                     HostCard(
                         host = host,
@@ -228,6 +283,17 @@ internal fun FleetScreen(
                         recheckEnabled = state.controlJobReady && capability?.eligibleFor(ControlAction.REFRESH_HOSTS) == true,
                         onRecheck = { onRecheckHosts(listOf(host.id)) },
                         disagreements = state.observerDisagreements[host.id].orEmpty(),
+                        reorder = if (reordering) {
+                            ReorderControls(
+                                canMoveUp = index > 0,
+                                canMoveDown = index < visibleHosts.lastIndex,
+                                onMoveUp = { move(host.id, -1) },
+                                onMoveDown = { move(host.id, +1) },
+                            )
+                        } else {
+                            null
+                        },
+                        modifier = Modifier.animateItem(),
                     )
                 }
             }
@@ -353,10 +419,29 @@ private fun FleetToolbar(
     filterCounts: Map<FleetFilter, Int>,
     sort: FleetSort,
     onSortChange: (FleetSort) -> Unit,
+    reordering: Boolean,
+    onToggleReorder: () -> Unit,
     visibleCount: Int,
     totalCount: Int,
 ) {
     var sortMenu by remember { mutableStateOf(false) }
+    if (reordering) {
+        FleetCard(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)) {
+            Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Reordering machines", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Use the arrows to move a machine. The order is kept on this phone and used by the Custom sort.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                FilledTonalButton(onClick = onToggleReorder) { Text("Done") }
+            }
+        }
+        return
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = query,
@@ -416,6 +501,15 @@ private fun FleetToolbar(
                             },
                         )
                     }
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Reorder machines…") },
+                        leadingIcon = { Icon(Icons.Outlined.SwapVert, contentDescription = null) },
+                        onClick = {
+                            sortMenu = false
+                            onToggleReorder()
+                        },
+                    )
                 }
             }
         }
@@ -439,10 +533,12 @@ internal fun HostCard(
     recheckEnabled: Boolean,
     onRecheck: () -> Unit,
     disagreements: List<ObserverDisagreement> = emptyList(),
+    reorder: ReorderControls? = null,
+    modifier: Modifier = Modifier,
 ) {
     val color = stateColor(host.state)
     FleetCard(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .animateContentSize(),
         onClick = { onClick(host) },
@@ -472,15 +568,6 @@ internal fun HostCard(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        if (host.isPinned) {
-                            Spacer(Modifier.width(5.dp))
-                            Icon(
-                                Icons.Outlined.PushPin,
-                                contentDescription = "Pinned machine",
-                                modifier = Modifier.size(14.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
                         Spacer(Modifier.width(8.dp))
                         StatusPill(stateLabel(host), color)
                     }
@@ -520,12 +607,23 @@ internal fun HostCard(
                         )
                     }
                 }
-                if (supportsRecheck) {
-                    IconButton(onClick = onRecheck, enabled = recheckEnabled) {
-                        Icon(Icons.Outlined.Refresh, contentDescription = "Recheck ${host.name}")
+                if (reorder != null) {
+                    Column {
+                        IconButton(onClick = reorder.onMoveUp, enabled = reorder.canMoveUp) {
+                            Icon(Icons.Outlined.ArrowUpward, contentDescription = "Move ${host.name} up")
+                        }
+                        IconButton(onClick = reorder.onMoveDown, enabled = reorder.canMoveDown) {
+                            Icon(Icons.Outlined.ArrowDownward, contentDescription = "Move ${host.name} down")
+                        }
                     }
+                } else {
+                    if (supportsRecheck) {
+                        IconButton(onClick = onRecheck, enabled = recheckEnabled) {
+                            Icon(Icons.Outlined.Refresh, contentDescription = "Recheck ${host.name}")
+                        }
+                    }
+                    Icon(Icons.Outlined.ChevronRight, contentDescription = "Details", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Icon(Icons.Outlined.ChevronRight, contentDescription = "Details", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -559,15 +657,6 @@ internal fun HostDetail(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (host.isPinned) {
-                        Spacer(Modifier.width(8.dp))
-                        Icon(
-                            Icons.Outlined.PushPin,
-                            contentDescription = "Pinned machine",
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     StatusPill(stateLabel(host), color, filled = true)

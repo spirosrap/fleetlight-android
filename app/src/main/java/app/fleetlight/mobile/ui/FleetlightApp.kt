@@ -103,12 +103,16 @@ fun FleetlightApp(
     viewModel: FleetlightViewModel,
     appearance: AppearanceSettings = AppearanceSettings(),
     onAppearanceChange: ((AppearanceSettings) -> AppearanceSettings) -> Unit = {},
+    fleetView: FleetViewSettings = FleetViewSettings(),
+    onFleetViewChange: ((FleetViewSettings) -> FleetViewSettings) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     FleetlightContent(
         state = state,
         appearance = appearance,
         onAppearanceChange = onAppearanceChange,
+        fleetView = fleetView,
+        onFleetViewChange = onFleetViewChange,
         onRefresh = viewModel::refreshNow,
         onRecheckHosts = viewModel::recheckHosts,
         onCheckForUpdates = viewModel::checkForUpdates,
@@ -146,6 +150,8 @@ fun FleetlightContent(
     onDismissJob: () -> Unit,
     appearance: AppearanceSettings = AppearanceSettings(),
     onAppearanceChange: ((AppearanceSettings) -> AppearanceSettings) -> Unit = {},
+    fleetView: FleetViewSettings = FleetViewSettings(),
+    onFleetViewChange: ((FleetViewSettings) -> FleetViewSettings) -> Unit = {},
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.FLEET) }
     var selectedHostId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -190,6 +196,8 @@ fun FleetlightContent(
                     onHostClick = { selectedHostId = it.id },
                     onRecheckHosts = onRecheckHosts,
                     onRefresh = onRefresh,
+                    fleetView = fleetView,
+                    onFleetViewChange = onFleetViewChange,
                 )
                 AppTab.TRENDS -> InsightsScreen(state.feed, trendsRequest)
                 AppTab.UPDATES -> UpdatesScreen(state, onCheckForUpdates, onRequestUpdate, onDismissJob)
@@ -503,9 +511,9 @@ private fun hostPriority(host: FleetHost): Int = when (host.state) {
     HostState.ONLINE -> if (host.issueTypes.isEmpty()) 6 else 5
 }
 
+/** Issues first, then name. Observer pins are not used on the phone; a saved custom order replaces them. */
 internal fun prioritizedFleetHosts(hosts: List<FleetHost>): List<FleetHost> = hosts.sortedWith(
     compareBy<FleetHost>(
-        { if (it.isPinned) 0 else 1 },
         ::hostPriority,
         { it.name.lowercase() },
     ),

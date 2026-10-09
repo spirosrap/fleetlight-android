@@ -25,8 +25,25 @@ class FleetScreenHelpersTest {
     )
 
     @Test
-    fun `priority keeps pinned first then issues`() {
-        assertEquals(listOf("c", "b", "d", "a"), filterFleetHosts(hosts).map(FleetHost::id))
+    fun `priority is issues first then name, ignoring observer pins`() {
+        assertEquals(listOf("b", "d", "a", "c"), filterFleetHosts(hosts).map(FleetHost::id))
+    }
+
+    @Test
+    fun `custom order follows the saved list and appends unknown machines`() {
+        val ordered = filterFleetHosts(hosts, sort = FleetSort.CUSTOM, customOrder = listOf("d", "a", "zzz"))
+        assertEquals(listOf("d", "a", "b", "c"), ordered.map(FleetHost::id))
+        assertEquals(listOf("b", "d", "a", "c"), filterFleetHosts(hosts, sort = FleetSort.CUSTOM).map(FleetHost::id))
+    }
+
+    @Test
+    fun `moving a machine swaps it with its neighbour and clamps at the ends`() {
+        val shown = listOf("a", "b", "c")
+        assertEquals(listOf("b", "a", "c"), movedOrder(shown, "b", -1))
+        assertEquals(listOf("a", "c", "b"), movedOrder(shown, "b", +1))
+        assertEquals(shown, movedOrder(shown, "a", -1))
+        assertEquals(shown, movedOrder(shown, "c", +1))
+        assertEquals(shown, movedOrder(shown, "missing", +1))
     }
 
     @Test
@@ -38,7 +55,6 @@ class FleetScreenHelpersTest {
     fun `platform filters match case-insensitively`() {
         assertEquals(setOf("a", "d"), filterFleetHosts(hosts, filter = FleetFilter.MACOS).map(FleetHost::id).toSet())
         assertEquals(setOf("b", "c"), filterFleetHosts(hosts, filter = FleetFilter.LINUX).map(FleetHost::id).toSet())
-        assertEquals(listOf("c"), filterFleetHosts(hosts, filter = FleetFilter.PINNED).map(FleetHost::id))
     }
 
     @Test

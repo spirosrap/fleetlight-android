@@ -25,7 +25,7 @@ class OperationHistoryPresentationTest {
     }
 
     @Test
-    fun pinnedHostsSortBeforeIssuePriorityThenKeepIssueOrdering() {
+    fun observerPinsDoNotAffectPriorityOrdering() {
         val hosts = listOf(
             FleetHost("offline", "Offline", state = HostState.OFFLINE),
             FleetHost("healthy-pinned", "Healthy pinned", state = HostState.ONLINE, isPinned = true),
@@ -34,7 +34,7 @@ class OperationHistoryPresentationTest {
         )
 
         assertEquals(
-            listOf("offline-pinned", "healthy-pinned", "offline", "slow"),
+            listOf("offline", "offline-pinned", "slow", "healthy-pinned"),
             prioritizedFleetHosts(hosts).map(FleetHost::id),
         )
     }

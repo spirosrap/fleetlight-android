@@ -1,122 +1,84 @@
 package app.fleetlight.mobile.ui
 
-import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.Canvas
+import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ShowChart
-import androidx.compose.material.icons.automirrored.outlined.CompareArrows
-import androidx.compose.material.icons.outlined.AccessTime
-import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Event
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Speed
-import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.SystemUpdateAlt
 import androidx.compose.material.icons.outlined.WarningAmber
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.fleetlight.mobile.BuildConfig
-import app.fleetlight.mobile.data.EndpointPolicy
 import app.fleetlight.mobile.data.ControlAction
-import app.fleetlight.mobile.data.ControlCapability
-import app.fleetlight.mobile.data.ControlCheckState
-import app.fleetlight.mobile.data.ControlEndpointPolicy
-import app.fleetlight.mobile.data.ControlJob
-import app.fleetlight.mobile.data.ControlJobState
-import app.fleetlight.mobile.data.ControlStatus
-import app.fleetlight.mobile.data.CodexDesktopAppState
 import app.fleetlight.mobile.data.FeedObserver
 import app.fleetlight.mobile.data.FleetHost
 import app.fleetlight.mobile.data.FleetIncident
 import app.fleetlight.mobile.data.FleetSummary
 import app.fleetlight.mobile.data.HostState
-import app.fleetlight.mobile.data.HostMetric
 import app.fleetlight.mobile.data.LinuxUpdate
 import app.fleetlight.mobile.data.MobileFeed
 import app.fleetlight.mobile.data.PendingControlAction
 import app.fleetlight.mobile.data.confirmationCopy
-import app.fleetlight.mobile.data.commandReachable
 import app.fleetlight.mobile.data.eligibleFor
-import app.fleetlight.mobile.data.receiptCounts
-import app.fleetlight.mobile.data.receiptTimestamp
-import app.fleetlight.mobile.data.safeHostName
-import app.fleetlight.mobile.data.updateAvailable
+import app.fleetlight.mobile.ui.theme.AppearanceSettings
 import app.fleetlight.mobile.ui.theme.FleetlightTheme
 import java.time.Duration
 import java.time.Instant
@@ -132,12 +94,21 @@ private enum class AppTab(val label: String, val icon: ImageVector) {
     SETTINGS("Settings", Icons.Outlined.Settings),
 }
 
+/** A request to open the Trends view focused on one machine. The nonce makes repeat requests observable. */
+internal data class TrendsRequest(val hostId: String, val nonce: Long)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FleetlightApp(viewModel: FleetlightViewModel) {
+fun FleetlightApp(
+    viewModel: FleetlightViewModel,
+    appearance: AppearanceSettings = AppearanceSettings(),
+    onAppearanceChange: ((AppearanceSettings) -> AppearanceSettings) -> Unit = {},
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     FleetlightContent(
         state = state,
+        appearance = appearance,
+        onAppearanceChange = onAppearanceChange,
         onRefresh = viewModel::refreshNow,
         onRecheckHosts = viewModel::recheckHosts,
         onCheckForUpdates = viewModel::checkForUpdates,
@@ -173,43 +144,26 @@ fun FleetlightContent(
     onConfirmUpdate: () -> Unit,
     onDismissUpdate: () -> Unit,
     onDismissJob: () -> Unit,
+    appearance: AppearanceSettings = AppearanceSettings(),
+    onAppearanceChange: ((AppearanceSettings) -> AppearanceSettings) -> Unit = {},
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.FLEET) }
-    var selectedHost by remember { mutableStateOf<FleetHost?>(null) }
+    var selectedHostId by rememberSaveable { mutableStateOf<String?>(null) }
+    var trendsRequest by remember { mutableStateOf<TrendsRequest?>(null) }
+    val context = LocalContext.current
+    // Resolve the sheet's machine from the live feed so it keeps updating while open.
+    val selectedHost = selectedHostId?.let { id -> state.feed?.hosts?.firstOrNull { it.id == id } }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Fleetlight", fontWeight = FontWeight.Bold)
-                        Text(
-                            text = observerSubtitle(state),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                },
-                actions = {
-                    TextButton(onClick = onRefresh, enabled = !state.refreshing) {
-                        if (state.refreshing) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Outlined.Refresh, contentDescription = "Reload status snapshot", modifier = Modifier.size(18.dp))
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (state.refreshing) "Reloading" else "Reload")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
+            FleetlightTopBar(
+                state = state,
+                onRefresh = onRefresh,
+                onShare = { shareText(context, fleetStatusSummary(state), "Fleet status") },
             )
         },
         bottomBar = {
-            NavigationBar {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
                 AppTab.entries.forEach { tab ->
                     NavigationBarItem(
                         selected = selectedTab == tab,
@@ -233,27 +187,49 @@ fun FleetlightContent(
             when (selectedTab) {
                 AppTab.FLEET -> FleetScreen(
                     state = state,
-                    onHostClick = { selectedHost = it },
+                    onHostClick = { selectedHostId = it.id },
                     onRecheckHosts = onRecheckHosts,
+                    onRefresh = onRefresh,
                 )
-                AppTab.TRENDS -> InsightsScreen(state.feed)
+                AppTab.TRENDS -> InsightsScreen(state.feed, trendsRequest)
                 AppTab.UPDATES -> UpdatesScreen(state, onCheckForUpdates, onRequestUpdate, onDismissJob)
                 AppTab.EVENTS -> EventsScreen(state.feed)
-                AppTab.SETTINGS -> SettingsScreen(state, onSaveEndpoints, onStagePairing, onRevokeControl)
+                AppTab.SETTINGS -> SettingsScreen(
+                    state = state,
+                    appearance = appearance,
+                    onAppearanceChange = onAppearanceChange,
+                    onSaveEndpoints = onSaveEndpoints,
+                    onStagePairing = onStagePairing,
+                    onForgetControl = onRevokeControl,
+                )
             }
         }
     }
 
     selectedHost?.let { host ->
-        ModalBottomSheet(onDismissRequest = { selectedHost = null }) {
+        ModalBottomSheet(
+            onDismissRequest = { selectedHostId = null },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MaterialTheme.colorScheme.surface,
+        ) {
             val capability = state.controlStatus?.capabilities?.firstOrNull { it.hostId == host.id }
             HostDetail(
                 host = host,
                 supportsRecheck = capability?.actions?.contains(ControlAction.REFRESH_HOSTS) == true,
                 recheckEnabled = state.controlJobReady && capability?.eligibleFor(ControlAction.REFRESH_HOSTS) == true,
                 onRecheck = { onRecheckHosts(listOf(host.id)) },
+                hasTrends = state.feed?.metrics?.any { it.hostId == host.id } == true,
+                onShowTrends = {
+                    trendsRequest = TrendsRequest(host.id, System.nanoTime())
+                    selectedHostId = null
+                    selectedTab = AppTab.TRENDS
+                },
+                onShare = { shareText(context, hostSummary(host), host.name) },
+                disagreements = state.observerDisagreements[host.id].orEmpty(),
+                chosenObserverName = state.feed?.observer?.name,
                 modifier = Modifier
-                    .padding(horizontal = 24.dp, vertical = 8.dp)
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 24.dp)
                     .verticalScroll(rememberScrollState()),
             )
         }
@@ -271,6 +247,82 @@ fun FleetlightContent(
     }
     state.pendingControlAction?.let { pending ->
         ControlConfirmationDialog(pending, onConfirmUpdate, onDismissUpdate)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FleetlightTopBar(state: FleetUiState, onRefresh: () -> Unit, onShare: () -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
+    TopAppBar(
+        title = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Fleetlight", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(10.dp))
+                    ConnectionPill(state.connection)
+                }
+                Text(
+                    text = observerSubtitle(state),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        actions = {
+            IconButton(onClick = onRefresh, enabled = !state.refreshing) {
+                if (state.refreshing) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Outlined.Refresh, contentDescription = "Reload status snapshot")
+                }
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Outlined.MoreVert, contentDescription = "More")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Share fleet status") },
+                        leadingIcon = { Icon(Icons.Outlined.Share, contentDescription = null) },
+                        enabled = state.feed != null,
+                        onClick = {
+                            menuOpen = false
+                            onShare()
+                        },
+                    )
+                }
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ),
+    )
+}
+
+@Composable
+private fun ConnectionPill(connection: FeedConnection) {
+    val (label, color) = when (connection) {
+        FeedConnection.LIVE -> "Live" to MaterialTheme.colorScheme.secondary
+        FeedConnection.CACHED -> "Cached" to MaterialTheme.colorScheme.tertiary
+        FeedConnection.ERROR -> "Offline" to MaterialTheme.colorScheme.error
+        FeedConnection.EMPTY -> return
+    }
+    Surface(color = color.copy(alpha = 0.13f), contentColor = color, shape = RoundedCornerShape(999.dp)) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .background(color, CircleShape),
+            )
+            Spacer(Modifier.width(5.dp))
+            Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
@@ -381,137 +433,12 @@ private fun ConnectionBanner(connection: FeedConnection, text: String) {
     }
 }
 
-@Composable
-private fun FleetScreen(
-    state: FleetUiState,
-    onHostClick: (FleetHost) -> Unit,
-    onRecheckHosts: (List<String>) -> Unit,
-) {
-    val feed = state.feed
-    if (feed == null) {
-        EmptyState(
-            icon = Icons.Outlined.Shield,
-            title = "Ready for your fleet",
-            message = "Add one or more HTTPS mobile-feed endpoints in Settings. Pair a controller separately when you want to initiate updates.",
-        )
-        return
-    }
-    val sortedHosts = remember(feed.hosts) { prioritizedFleetHosts(feed.hosts) }
-    val capabilities = state.controlStatus?.capabilities.orEmpty()
-    val recheckTargets = capabilities.filter { ControlAction.REFRESH_HOSTS in it.actions }
-    val recheckCapabilities = capabilities.associateBy { it.hostId }
-    val recheckRunning = state.activeJob?.let {
-        it.action == ControlAction.REFRESH_HOSTS && !it.state.isTerminal
-    } == true
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            SummarySection(
-                summary = feed.summary,
-                generatedAt = feed.generatedAt,
-                recheckAvailable = recheckTargets.isNotEmpty(),
-                recheckEnabled = state.controlJobReady && recheckTargets.isNotEmpty(),
-                recheckRunning = recheckRunning,
-                onRecheckFleet = { onRecheckHosts(recheckTargets.map { it.hostId }) },
-            )
-        }
-        state.controlError?.let { message ->
-            item { ControlMessageCard(message, error = true) }
-        }
-        item {
-            SectionHeading(
-                title = "Machines",
-                subtitle = when {
-                    sortedHosts.any(FleetHost::isPinned) -> "Pinned first · then issues"
-                    feed.summary.issueCount == 0 -> "All clear"
-                    else -> "Issues first"
-                },
-            )
-        }
-        items(sortedHosts, key = FleetHost::id) { host ->
-            val capability = recheckCapabilities[host.id]
-            HostCard(
-                host = host,
-                onClick = onHostClick,
-                supportsRecheck = capability?.actions?.contains(ControlAction.REFRESH_HOSTS) == true,
-                recheckEnabled = state.controlJobReady && capability?.eligibleFor(ControlAction.REFRESH_HOSTS) == true,
-                onRecheck = { onRecheckHosts(listOf(host.id)) },
-            )
-        }
-        item { Spacer(Modifier.height(8.dp)) }
-    }
-}
+// ---------------------------------------------------------------------------
+// Shared helpers used by several screens
+// ---------------------------------------------------------------------------
 
 @Composable
-private fun SummarySection(
-    summary: FleetSummary,
-    generatedAt: Instant,
-    recheckAvailable: Boolean,
-    recheckEnabled: Boolean,
-    recheckRunning: Boolean,
-    onRecheckFleet: () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column {
-                Text(
-                    if (summary.issueCount == 0) "Fleet is healthy" else "${summary.issueCount} signals need attention",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    "${summary.online} online of ${summary.total} · ${relativeTime(generatedAt)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            StatusOrb(healthy = summary.issueCount == 0, Modifier.size(44.dp))
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            SummaryChip("Online", summary.online, MaterialTheme.colorScheme.secondaryContainer)
-            if (summary.offline > 0) SummaryChip("Offline", summary.offline, MaterialTheme.colorScheme.errorContainer)
-            if (summary.slowConnections > 0) SummaryChip("Slow", summary.slowConnections, MaterialTheme.colorScheme.tertiaryContainer)
-            if (summary.accessIssues > 0) SummaryChip("Access", summary.accessIssues, MaterialTheme.colorScheme.errorContainer)
-            if (summary.alerts > 0) SummaryChip("Alerts", summary.alerts, MaterialTheme.colorScheme.errorContainer)
-            if (summary.updatesAvailable > 0) SummaryChip("Updates", summary.updatesAvailable, MaterialTheme.colorScheme.primaryContainer)
-            if (summary.restartRequired > 0) SummaryChip("Restart", summary.restartRequired, MaterialTheme.colorScheme.tertiaryContainer)
-        }
-        if (recheckAvailable) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "Run fresh read-only probes on every machine",
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(12.dp))
-                FilledTonalButton(onClick = onRecheckFleet, enabled = recheckEnabled) {
-                    if (recheckRunning) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(6.dp))
-                    } else {
-                        Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                    }
-                    Text(if (recheckRunning) "Rechecking…" else "Recheck fleet")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SummaryChip(label: String, count: Int, color: Color) {
+internal fun SummaryChip(label: String, count: Int, color: Color) {
     Surface(color = color, shape = RoundedCornerShape(999.dp)) {
         Text(
             "$count $label",
@@ -523,2229 +450,37 @@ private fun SummaryChip(label: String, count: Int, color: Color) {
 }
 
 @Composable
-private fun HostCard(
-    host: FleetHost,
-    onClick: (FleetHost) -> Unit,
-    supportsRecheck: Boolean,
-    recheckEnabled: Boolean,
-    onRecheck: () -> Unit,
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .animateContentSize()
-            .clickable { onClick(host) },
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            StatusOrb(healthy = host.state == HostState.ONLINE, Modifier.size(38.dp), state = host.state)
-            Spacer(Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(host.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    if (host.isPinned) {
-                        Spacer(Modifier.width(6.dp))
-                        Icon(
-                            Icons.Outlined.PushPin,
-                            contentDescription = "Pinned machine",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        host.status.replaceFirstChar(Char::uppercase),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = stateColor(host.state),
-                    )
-                }
-                Text(
-                    buildList {
-                        add(host.platform)
-                        host.pingMs?.let { add("${it.roundToInt()} ms") }
-                        host.health?.let { add("Health $it") }
-                    }.joinToString(" · "),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                val issueLine = (host.issueTypes + listOfNotNull(host.detail)).distinct().joinToString(" · ")
-                if (issueLine.isNotBlank()) {
-                    Text(
-                        issueLine,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (host.state == HostState.ONLINE) MaterialTheme.colorScheme.onSurfaceVariant else stateColor(host.state),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            if (supportsRecheck) {
-                TextButton(onClick = onRecheck, enabled = recheckEnabled) { Text("Recheck") }
-            }
-            Icon(Icons.Outlined.ChevronRight, contentDescription = "Details", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun HostDetail(
-    host: FleetHost,
-    supportsRecheck: Boolean,
-    recheckEnabled: Boolean,
-    onRecheck: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            StatusOrb(healthy = host.state == HostState.ONLINE, Modifier.size(48.dp), host.state)
-            Spacer(Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(host.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    if (host.isPinned) {
-                        Spacer(Modifier.width(8.dp))
-                        Icon(
-                            Icons.Outlined.PushPin,
-                            contentDescription = "Pinned machine",
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-                Text(
-                    "${host.platform} · ${host.status.replaceFirstChar(Char::uppercase)}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (supportsRecheck) {
-            FilledTonalButton(
-                onClick = onRecheck,
-                enabled = recheckEnabled,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Recheck ${host.name}")
-            }
-            Text(
-                "Read-only: refreshes this machine's status without installing updates or restarting it.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        host.detail?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
-        HorizontalDivider()
-        DetailGrid(host)
-        if (host.issueTypes.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Signals", style = MaterialTheme.typography.titleSmall)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    host.issueTypes.forEach { SummaryChip(it, 1, MaterialTheme.colorScheme.errorContainer) }
-                }
-            }
-        }
-        host.checkedAt?.let {
-            Text("Checked ${dateTime(it)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun DetailGrid(host: FleetHost) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        host.health?.let { DetailRow("Health", "$it") }
-        host.pingMs?.let { DetailRow("Ping", "${it.roundToInt()} ms") }
-        host.jitterMs?.let { DetailRow("Jitter", "${formatDecimal(it)} ms") }
-        host.packetLossPercent?.let { DetailRow("Packet loss", "${formatDecimal(it)}%") }
-        host.sshReadyMs?.let { DetailRow("SSH ready", "${it.roundToInt()} ms") }
-        host.fullProbeMs?.let { DetailRow("Full probe", "${it.roundToInt()} ms") }
-        host.operatingSystem?.let { DetailRow("System", it) }
-        host.codexCliVersion?.let { DetailRow("Codex CLI", it) }
-        host.fleetlightVersion?.let { DetailRow("Fleetlight", it) }
-        host.diskPercent?.let { DetailRow("Disk used", "${formatDecimal(it)}%") }
-        host.memoryPercent?.let { DetailRow("Memory used", "${formatDecimal(it)}%") }
-        host.loadAverage?.let { DetailRow("Load average", formatDecimal(it)) }
-        host.bootDescription?.let { DetailRow("Boot", it) }
-        if (host.restartRequired) DetailRow("Restart", "Required")
-        host.codexDesktopAppVersion
-            ?.takeUnless { host.effectiveDesktopAppState == CodexDesktopAppState.MISSING }
-            ?.let { version ->
-                DetailRow(
-                    "ChatGPT Desktop App",
-                    listOfNotNull(
-                        host.desktopAppPlatformLabel,
-                        version,
-                        host.codexDesktopAppBuild?.let { "build $it" },
-                    ).joinToString(" · "),
-                )
-            }
-        host.desktopAppProviderLabel?.let { DetailRow("Desktop app provider", it) }
-        when (host.effectiveDesktopAppState) {
-            CodexDesktopAppState.UPDATE_AVAILABLE -> DetailRow(
-                "Desktop app update",
-                host.codexDesktopAppAvailableVersion?.let { "$it available" } ?: "Available",
-            )
-            CodexDesktopAppState.CURRENT -> DetailRow("Desktop app update", "Current")
-            CodexDesktopAppState.MISSING -> DetailRow("Desktop app update", "Not installed")
-            CodexDesktopAppState.OFFLINE -> DetailRow("Desktop app update", "Offline")
-            CodexDesktopAppState.UNAVAILABLE -> DetailRow("Desktop app update", "Unavailable")
-            null -> if (host.hasDesktopAppMetadata) DetailRow("Desktop app update", "Check required")
-        }
-        host.codexDesktopAppCheckedAt?.let { DetailRow("Desktop app checked", dateTime(it)) }
-        if (host.services.isNotEmpty()) {
-            DetailRow("Services", host.services.joinToString { "${it.name}: ${it.state}" })
-        }
-        if (host.warnings.isNotEmpty()) DetailRow("Warnings", host.warnings.joinToString(" · ") { it.title })
-    }
-}
-
-@Composable
-private fun DetailRow(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, fontWeight = FontWeight.Medium)
-    }
-}
-
-private enum class InsightMode(val label: String) {
-    COMPARE("Compare"),
-    TRENDS("Trends"),
-}
-
-@Composable
-private fun InsightsScreen(feed: MobileFeed?) {
-    var selectedMode by rememberSaveable { mutableStateOf(InsightMode.COMPARE) }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            InsightMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = selectedMode == mode,
-                    onClick = { selectedMode = mode },
-                    label = { Text(mode.label) },
-                    leadingIcon = if (mode == InsightMode.COMPARE) {
-                        { Icon(Icons.AutoMirrored.Outlined.CompareArrows, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                    } else {
-                        { Icon(Icons.AutoMirrored.Outlined.ShowChart, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                    },
-                )
-            }
-        }
-        HorizontalDivider()
-        Box(modifier = Modifier.weight(1f)) {
-            when (selectedMode) {
-                InsightMode.COMPARE -> ComparisonScreen(feed)
-                InsightMode.TRENDS -> TrendsScreen(feed)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ComparisonScreen(feed: MobileFeed?) {
-    if (feed == null) {
-        EmptyState(Icons.AutoMirrored.Outlined.CompareArrows, "No comparison data", "Connect a feed to compare live machine timing.")
-        return
-    }
-
-    var selectedMetric by rememberSaveable { mutableStateOf(FleetComparisonMetric.PING) }
-    var selectedWindow by rememberSaveable { mutableStateOf(FleetComparisonWindow.NOW) }
-    var selectedOrdering by rememberSaveable { mutableStateOf(FleetComparisonOrdering.SPEED) }
-    LaunchedEffect(selectedWindow) {
-        if (selectedWindow == FleetComparisonWindow.NOW) {
-            selectedOrdering = FleetComparisonOrdering.SPEED
-        }
-    }
-    val effectiveOrdering = if (selectedWindow == FleetComparisonWindow.NOW) {
-        FleetComparisonOrdering.SPEED
-    } else {
-        selectedOrdering
-    }
-    val ranks = remember(
-        feed.hosts,
-        feed.metrics,
-        feed.timingComparisons,
-        feed.generatedAt,
-        feed.observer.id,
-        selectedMetric,
-        selectedWindow,
-        effectiveOrdering,
-    ) {
-        if (selectedWindow == FleetComparisonWindow.NOW) {
-            fleetComparisonRanks(feed.hosts, feed.observer.id, selectedMetric)
-        } else {
-            historicalFleetComparisonRanks(
-                hosts = feed.hosts,
-                observerId = feed.observer.id,
-                metrics = feed.metrics,
-                endAt = feed.generatedAt,
-                window = selectedWindow,
-                metric = selectedMetric,
-                timingComparisons = feed.timingComparisons,
-                ordering = effectiveOrdering,
-            )
-        }
-    }
-    val measuredRanks = remember(ranks) { ranks.filter { it.valueMilliseconds != null } }
-    val positionedRanks = remember(ranks, effectiveOrdering) {
-        if (effectiveOrdering == FleetComparisonOrdering.CHANGE) {
-            ranks.filter(FleetComparisonRank::isPairedPeriodComparison)
-        } else {
-            measuredRanks
-        }
-    }
-    val hasHistoricalEvidence = remember(ranks, selectedWindow) {
-        selectedWindow != FleetComparisonWindow.NOW &&
-            ranks.any { (it.previousSampleCount ?: 0) > 0 }
-    }
-    val summary = remember(ranks) { fleetComparisonSummary(ranks) }
-    val sourceSummary = remember(ranks, selectedWindow, feed.metricsWindowHours) {
-        fleetComparisonSourceSummary(ranks, selectedWindow, feed.metricsWindowHours)
-    }
-    val maximumValue = measuredRanks.maxOfOrNull { it.valueMilliseconds ?: 0.0 }?.coerceAtLeast(1.0) ?: 1.0
-    val fastest = measuredRanks.minWithOrNull(
-        compareBy<FleetComparisonRank>(
-            { it.valueMilliseconds ?: Double.MAX_VALUE },
-            { it.host.id },
-        ),
-    )
-
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            SectionHeading(
-                title = "Fleet comparison",
-                subtitle = if (selectedWindow == FleetComparisonWindow.NOW) {
-                    "Current feed timings ranked fastest to slowest"
-                } else if (effectiveOrdering == FleetComparisonOrdering.CHANGE) {
-                    "Most improved to most regressed vs the previous ${selectedWindow.label}"
-                } else {
-                    "Verified ${selectedWindow.label} averages ranked fastest to slowest"
-                },
-            )
-        }
-        item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(FleetComparisonMetric.entries) { metric ->
-                    FilterChip(
-                        selected = selectedMetric == metric,
-                        onClick = { selectedMetric = metric },
-                        label = { Text(metric.label) },
-                    )
-                }
-            }
-        }
-        item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(FleetComparisonWindow.entries) { window ->
-                    FilterChip(
-                        selected = selectedWindow == window,
-                        onClick = { selectedWindow = window },
-                        label = { Text(window.label) },
-                    )
-                }
-            }
-        }
-        if (selectedWindow != FleetComparisonWindow.NOW) {
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        "Order",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    FleetComparisonOrdering.entries.forEach { ordering ->
-                        FilterChip(
-                            selected = effectiveOrdering == ordering,
-                            onClick = { selectedOrdering = ordering },
-                            label = { Text(ordering.label) },
-                        )
-                    }
-                }
-            }
-        }
-        item {
-            ComparisonSummaryCard(
-                fastestName = fastest?.host?.name,
-                summary = summary,
-                observerExcluded = ranks.any(FleetComparisonRank::isObserver),
-                observerIdentityReported = feed.observer.id.isNotBlank(),
-                window = selectedWindow,
-                sourceSummary = sourceSummary,
-            )
-        }
-        if (measuredRanks.isEmpty() && !hasHistoricalEvidence) {
-            item {
-                InlineEmpty(
-                    if (selectedWindow == FleetComparisonWindow.NOW) {
-                        "No live ${selectedMetric.label.lowercase()} measurements yet. Reload after the controller finishes probing the fleet."
-                    } else {
-                        "No verified ${selectedMetric.label.lowercase()} history in ${selectedWindow.label} yet."
-                    },
-                )
-            }
-        } else {
-            items(ranks, key = { it.host.id }) { rank ->
-                ComparisonRankCard(
-                    rank = rank,
-                    metric = selectedMetric,
-                    position = positionedRanks.indexOfFirst { it.host.id == rank.host.id }
-                        .takeIf { it >= 0 }
-                        ?.plus(1),
-                    bestMilliseconds = summary.bestMilliseconds,
-                    maximumMilliseconds = maximumValue,
-                    window = selectedWindow,
-                    ordering = effectiveOrdering,
-                )
-            }
-        }
-        item { Spacer(Modifier.height(8.dp)) }
-    }
-}
-
-@Composable
-private fun ComparisonSummaryCard(
-    fastestName: String?,
-    summary: FleetComparisonSummary,
-    observerExcluded: Boolean,
-    observerIdentityReported: Boolean,
-    window: FleetComparisonWindow,
-    sourceSummary: FleetComparisonSourceSummary,
-) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ComparisonStat("Fastest", fastestName ?: "—", Modifier.weight(1f))
-                ComparisonStat("Typical", summary.medianMilliseconds?.let(::formatComparisonDuration) ?: "—", Modifier.weight(1f))
-                ComparisonStat("Spread", summary.spreadMilliseconds?.let(::formatComparisonDuration) ?: "—", Modifier.weight(1f))
-            }
-            if (window == FleetComparisonWindow.NOW) {
-                Text(
-                    buildString {
-                        append("${summary.measuredCount} of ${summary.remoteCount} ")
-                        append(if (observerExcluded) "remote " else "")
-                        append("machine${if (summary.remoteCount == 1) "" else "s"} measured")
-                        append(observerEvidenceLabel(observerExcluded, observerIdentityReported))
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                Text(
-                    "${summary.measuredCount} of ${summary.remoteCount} measured · ${summary.comparableCount} comparable",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "Faster ${summary.fasterCount} · About same ${summary.stableCount} · Slower ${summary.slowerCount}",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    "Evidence · Strong ${summary.strongEvidenceCount} · Fair ${summary.fairEvidenceCount} · " +
-                        "Limited ${summary.limitedEvidenceCount} · Unpaired ${summary.unpairedCount}",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "Coverage is the time span from the first to last valid sample, not sample density.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                summary.biggestImprovement?.let { mover ->
-                    ComparisonMoverCallout(
-                        label = "Biggest improvement",
-                        mover = mover,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                summary.biggestSlowdown?.let { mover ->
-                    ComparisonMoverCallout(
-                        label = "Biggest slowdown",
-                        mover = mover,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                Text(
-                    "Current ${summary.currentSampleCount} samples · previous ${summary.previousSampleCount} · " +
-                        comparisonSourceLabel(sourceSummary) +
-                        observerEvidenceLabel(observerExcluded, observerIdentityReported),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (sourceSummary.rawHistoryCoverageInsufficient) {
-                    Text(
-                        "${window.label} comparison needs ${sourceSummary.requiredHistoryHours}h of source history; " +
-                            "${sourceSummary.reportedHistoryHours}h reported. " +
-                            rawHistoryControllerAssurance(sourceSummary),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                } else if (sourceSummary.rawHistoryCoverageUnknown) {
-                    Text(
-                        "Sampled-history coverage is not reported, so previous-period results may be incomplete. " +
-                            rawHistoryControllerAssurance(sourceSummary),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ComparisonMoverCallout(
-    label: String,
-    mover: FleetComparisonMover,
-    color: Color,
-) {
-    val value = mover.let {
-        val movement = if (it.isNewDelay) {
-            "${it.hostName} · new delay +${formatComparisonDuration(it.deltaMilliseconds)}"
-        } else {
-            val direction = if (it.deltaMilliseconds < 0.0) "faster" else "slower"
-            val percent = it.deltaPercent?.let { change -> "${formatDecimal(kotlin.math.abs(change))}% $direction · " }.orEmpty()
-            "${it.hostName} · $percent${formatComparisonDuration(kotlin.math.abs(it.deltaMilliseconds))}"
-        }
-        movement + if (it.hasLimitedEvidence) " · Limited evidence" else ""
-    }
-    Surface(
-        color = color.copy(alpha = 0.10f),
-        contentColor = color,
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-            Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
-            Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
-        }
-    }
-}
-
-private fun observerEvidenceLabel(observerExcluded: Boolean, observerIdentityReported: Boolean): String = when {
-    observerExcluded -> " · observer excluded"
-    observerIdentityReported -> " · reported observer is not listed"
-    else -> " · observer identity not reported"
-}
-
-private fun comparisonSourceLabel(source: FleetComparisonSourceSummary): String = when {
-    source.controllerHostCount > 0 && source.rawHistoryHostCount > 0 -> "controller + sampled history"
-    source.controllerHostCount > 0 -> "controller aggregates"
-    else -> "sampled history"
-}
-
-private fun rawHistoryControllerAssurance(source: FleetComparisonSourceSummary): String =
-    if (source.controllerHostCount > 0) {
-        "Controller-backed machines remain exact."
-    } else {
-        "Use a current controller feed for exact comparisons."
-    }
-
-@Composable
-private fun ComparisonStat(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(
-            value,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@Composable
-private fun ComparisonRankCard(
-    rank: FleetComparisonRank,
-    metric: FleetComparisonMetric,
-    position: Int?,
-    bestMilliseconds: Double?,
-    maximumMilliseconds: Double,
-    window: FleetComparisonWindow,
-    ordering: FleetComparisonOrdering,
-) {
-    val color = when (metric) {
-        FleetComparisonMetric.PING -> MaterialTheme.colorScheme.secondary
-        FleetComparisonMetric.SSH_READY -> MaterialTheme.colorScheme.primary
-        FleetComparisonMetric.CHECKS -> MaterialTheme.colorScheme.tertiary
-        FleetComparisonMetric.FULL_PROBE -> MaterialTheme.colorScheme.error
-    }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    position?.toString() ?: "—",
-                    modifier = Modifier.width(24.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = if (position == 1) color else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(rank.host.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                val leaderLabel = when {
-                    position != 1 -> null
-                    ordering == FleetComparisonOrdering.SPEED -> "FASTEST"
-                    rank.direction == FleetComparisonDirection.FASTER -> "MOST IMPROVED"
-                    else -> null
-                }
-                if (leaderLabel != null) {
-                    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(999.dp)) {
-                        Text(
-                            leaderLabel,
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = color,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(comparisonValueLabel(rank, window), fontWeight = FontWeight.Bold, color = comparisonRankColor(rank))
-                comparisonDelta(rank.valueMilliseconds, bestMilliseconds)
-                    ?.takeIf { ordering == FleetComparisonOrdering.SPEED }
-                    ?.let { delta ->
-                        Spacer(Modifier.width(6.dp))
-                        Text(delta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-            }
-            rank.valueMilliseconds?.takeIf { ordering == FleetComparisonOrdering.SPEED }?.let { value ->
-                LinearProgressIndicator(
-                    progress = { (value / maximumMilliseconds).toFloat().coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth(),
-                    color = color,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                )
-            }
-            if (window != FleetComparisonWindow.NOW) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (rank.direction != FleetComparisonDirection.NO_BASELINE) {
-                        ComparisonDirectionBadge(rank)
-                    }
-                    ComparisonEvidenceBadge(rank.evidenceStrength)
-                }
-            }
-            Text(
-                comparisonDetail(rank, metric, window),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = if (window == FleetComparisonWindow.NOW) 2 else 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ComparisonEvidenceBadge(strength: FleetComparisonEvidenceStrength) {
-    val label = when (strength) {
-        FleetComparisonEvidenceStrength.STRONG -> "Strong evidence"
-        FleetComparisonEvidenceStrength.FAIR -> "Fair evidence"
-        FleetComparisonEvidenceStrength.LIMITED -> "Limited evidence"
-        FleetComparisonEvidenceStrength.NONE -> "Unpaired"
-    }
-    val color = when (strength) {
-        FleetComparisonEvidenceStrength.STRONG -> MaterialTheme.colorScheme.primary
-        FleetComparisonEvidenceStrength.FAIR -> MaterialTheme.colorScheme.tertiary
-        FleetComparisonEvidenceStrength.LIMITED -> MaterialTheme.colorScheme.error
-        FleetComparisonEvidenceStrength.NONE -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Surface(
-        color = color.copy(alpha = 0.12f),
-        contentColor = color,
-        shape = RoundedCornerShape(999.dp),
-    ) {
-        Text(
-            label,
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-}
-
-@Composable
-private fun comparisonRankColor(rank: FleetComparisonRank): Color = when {
-    rank.isObserver -> MaterialTheme.colorScheme.onSurfaceVariant
-    rank.sampleCount != null && rank.valueMilliseconds != null -> MaterialTheme.colorScheme.onSurface
-    rank.host.state == HostState.OFFLINE -> MaterialTheme.colorScheme.error
-    rank.valueMilliseconds == null -> MaterialTheme.colorScheme.onSurfaceVariant
-    else -> MaterialTheme.colorScheme.onSurface
-}
-
-private fun comparisonValueLabel(rank: FleetComparisonRank, window: FleetComparisonWindow): String = when {
-    rank.isObserver -> "Observer"
-    rank.valueMilliseconds != null -> formatComparisonDuration(rank.valueMilliseconds)
-    window != FleetComparisonWindow.NOW -> "No history"
-    rank.host.state == HostState.OFFLINE -> "Offline"
-    else -> "No data"
-}
-
-@Composable
-private fun ComparisonDirectionBadge(rank: FleetComparisonRank) {
-    val color = when (rank.direction) {
-        FleetComparisonDirection.FASTER -> MaterialTheme.colorScheme.primary
-        FleetComparisonDirection.STABLE -> MaterialTheme.colorScheme.onSurfaceVariant
-        FleetComparisonDirection.SLOWER -> MaterialTheme.colorScheme.error
-        FleetComparisonDirection.NO_BASELINE -> return
-    }
-    Surface(
-        color = color.copy(alpha = 0.12f),
-        contentColor = color,
-        shape = RoundedCornerShape(999.dp),
-    ) {
-        Text(
-            comparisonDirectionLabel(rank),
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-}
-
-private fun comparisonDirectionLabel(rank: FleetComparisonRank): String {
-    val direction = when (rank.direction) {
-        FleetComparisonDirection.FASTER -> "Faster"
-        FleetComparisonDirection.STABLE -> "About same"
-        FleetComparisonDirection.SLOWER -> "Slower"
-        FleetComparisonDirection.NO_BASELINE -> return "No baseline"
-    }
-    val delta = rank.deltaMilliseconds?.let(::formatSignedComparisonDuration) ?: return direction
-    val percent = rank.deltaPercent?.let { " (${formatSignedDecimal(it)}%)" }.orEmpty()
-    return "$direction · $delta$percent"
-}
-
-private fun comparisonDelta(value: Double?, best: Double?): String? {
-    if (value == null || best == null || value <= best) return null
-    return "+${formatComparisonDuration(value - best)}"
-}
-
-private fun comparisonDetail(
-    rank: FleetComparisonRank,
-    metric: FleetComparisonMetric,
-    window: FleetComparisonWindow,
-): String {
-    if (rank.isObserver) return "Local process timing is not comparable with remote SSH machines"
-    rank.sampleCount?.let { count ->
-        val previousCount = rank.previousSampleCount ?: 0
-        val current = rank.valueMilliseconds?.let(::formatComparisonDuration) ?: "no data"
-        val previous = rank.previousValueMilliseconds?.let(::formatComparisonDuration) ?: "no data"
-        val currentCoverage = comparisonCoverageLabel(rank.currentCoverageSeconds, rank.comparisonWindowSeconds)
-        val previousCoverage = comparisonCoverageLabel(rank.previousCoverageSeconds, rank.comparisonWindowSeconds)
-        val currentState = if (rank.host.state.isLiveForComparison()) {
-            null
-        } else {
-            "currently ${rank.host.status.lowercase()}"
-        }
-        val currentLine = "Current $current · ${comparisonSampleLabel(count)} · $currentCoverage"
-        val previousLine = listOfNotNull(
-            "Previous $previous",
-            comparisonSampleLabel(previousCount),
-            previousCoverage,
-            currentState,
-        ).joinToString(" · ")
-        return "$currentLine\n$previousLine"
-    }
-    if (!rank.host.state.isLiveForComparison()) return rank.host.detail ?: rank.host.status.replaceFirstChar(Char::uppercase)
-    return when (metric) {
-        FleetComparisonMetric.PING -> listOfNotNull(
-            rank.host.jitterMs?.let { "jitter ${formatComparisonDuration(it)}" },
-            rank.host.packetLossPercent?.let { "loss ${formatDecimal(it)}%" },
-        ).joinToString(" · ").ifBlank { "Round-trip network time" }
-        FleetComparisonMetric.SSH_READY -> rank.host.pingMs?.let { "ping ${formatComparisonDuration(it)}" }
-            ?: "Time until the SSH connection is ready"
-        FleetComparisonMetric.CHECKS -> "Remote metrics and service work after SSH is ready"
-        FleetComparisonMetric.FULL_PROBE -> listOfNotNull(
-            rank.host.sshReadyMs?.let { "SSH ${formatComparisonDuration(it)}" },
-            FleetComparisonMetric.CHECKS.value(rank.host)?.let { "checks ${formatComparisonDuration(it)}" },
-        ).joinToString(" + ").ifBlank { "Complete remote probe time" }
-    }
-}
-
-private fun comparisonSampleLabel(count: Int): String = "$count sample${if (count == 1) "" else "s"}"
-
-private fun comparisonCoverageLabel(coverageSeconds: Double?, windowSeconds: Double?): String {
-    val window = windowSeconds?.takeIf { it.isFinite() && it > 0.0 } ?: return "coverage unknown"
-    val coverage = coverageSeconds?.takeIf { it.isFinite() && it >= 0.0 } ?: return "coverage unknown"
-    // Floor the displayed value so 24.99% never looks like it meets the 25% tier boundary.
-    val percent = (coverage.coerceAtMost(window) / window * 100.0).toInt()
-    return "$percent% coverage"
-}
-
-private fun formatComparisonDuration(milliseconds: Double): String = when {
-    milliseconds >= 1_000 -> "%.2f s".format(milliseconds / 1_000.0)
-    else -> "${formatDecimal(milliseconds)} ms"
-}
-
-private fun formatSignedComparisonDuration(milliseconds: Double): String {
-    val sign = if (milliseconds >= 0.0) "+" else "−"
-    return sign + formatComparisonDuration(kotlin.math.abs(milliseconds))
-}
-
-private fun formatSignedDecimal(value: Double): String {
-    val sign = if (value >= 0.0) "+" else "−"
-    return sign + formatDecimal(kotlin.math.abs(value))
-}
-
-internal enum class TrendWindow(val hours: Int, val label: String) {
-    ONE_HOUR(1, "1h"),
-    SIX_HOURS(6, "6h"),
-    TWENTY_FOUR_HOURS(24, "24h"),
-}
-
-internal fun trendMetrics(
-    metrics: List<HostMetric>,
-    hostId: String,
-    endAt: Instant,
-    window: TrendWindow,
-): List<HostMetric> {
-    val startAt = endAt.minus(Duration.ofHours(window.hours.toLong()))
-    return metrics.asSequence()
-        .filter { it.hostId == hostId }
-        .filter { !it.capturedAt.isBefore(startAt) && !it.capturedAt.isAfter(endAt) }
-        .sortedBy(HostMetric::capturedAt)
-        .distinctBy(HostMetric::capturedAt)
-        .toList()
-}
-
-internal fun averageTrendValue(
-    metrics: List<HostMetric>,
-    value: (HostMetric) -> Double?,
-): Double? {
-    val values = metrics.mapNotNull(value)
-    return values.takeIf { it.isNotEmpty() }?.average()
-}
-
-internal fun trendCoveragePercent(
-    samples: List<HostMetric>,
-    window: TrendWindow,
-    sampleIntervalSeconds: Int?,
-): Int? {
-    val interval = sampleIntervalSeconds?.takeIf { it > 0 } ?: return null
-    val expected = (Duration.ofHours(window.hours.toLong()).seconds / interval).toInt() + 1
-    if (expected <= 0) return null
-    return ((samples.size * 100.0) / expected).roundToInt().coerceIn(0, 100)
-}
-
-internal fun trendGapThresholdSeconds(
-    window: TrendWindow,
-    sampleIntervalSeconds: Int?,
-): Long = sampleIntervalSeconds
-    ?.takeIf { it > 0 }
-    ?.toLong()
-    ?.times(3)
-    ?.coerceAtLeast(90L)
-    ?: maxOf(45 * 60L, Duration.ofHours(window.hours.toLong()).seconds / 6)
-
-internal fun formatTrendDuration(seconds: Long): String = when {
-    seconds < 60 -> "${seconds.coerceAtLeast(0)} sec"
-    seconds < 3_600 -> "${seconds / 60} min"
-    else -> "${seconds / 3_600}h ${((seconds % 3_600) / 60).toString().padStart(2, '0')}m"
-}
-
-internal fun nearestTrendMetric(samples: List<HostMetric>, target: Instant): HostMetric? {
-    if (samples.isEmpty()) return null
-    if (!target.isAfter(samples.first().capturedAt)) return samples.first()
-    if (!target.isBefore(samples.last().capturedAt)) return samples.last()
-
-    var lower = 0
-    var upper = samples.lastIndex
-    while (lower <= upper) {
-        val middle = (lower + upper) ushr 1
-        val timestamp = samples[middle].capturedAt
-        when {
-            timestamp == target -> return samples[middle]
-            timestamp.isBefore(target) -> lower = middle + 1
-            else -> upper = middle - 1
-        }
-    }
-    val earlier = samples[upper]
-    val later = samples[lower]
-    val earlierDistance = Duration.between(earlier.capturedAt, target).toMillis()
-    val laterDistance = Duration.between(target, later.capturedAt).toMillis()
-    return if (earlierDistance <= laterDistance) earlier else later
-}
-
-private data class TrendDefinition(
-    val label: String,
-    val color: Color,
-    val value: (HostMetric) -> Double?,
-)
-
-@Composable
-private fun TrendsScreen(feed: MobileFeed?) {
-    if (feed == null) {
-        EmptyState(Icons.AutoMirrored.Outlined.ShowChart, "No trend data", "Connect a feed to view machine history.")
-        return
-    }
-
-    val metricHostIDs = remember(feed.metrics) { feed.metrics.map(HostMetric::hostId).toSet() }
-    val hostsWithMetrics = remember(feed.hosts, metricHostIDs) {
-        prioritizedFleetHosts(feed.hosts.filter { it.id in metricHostIDs })
-    }
-    if (hostsWithMetrics.isEmpty()) {
-        EmptyState(
-            Icons.AutoMirrored.Outlined.ShowChart,
-            "History is still collecting",
-            "Fleetlight will show trends after the observer publishes metric samples.",
-        )
-        return
-    }
-
-    var selectedHostID by rememberSaveable { mutableStateOf<String?>(null) }
-    var selectedWindow by rememberSaveable { mutableStateOf(TrendWindow.SIX_HOURS) }
-    var selectedTimestampMillis by rememberSaveable { mutableStateOf<Long?>(null) }
-    val selectedHost = hostsWithMetrics.firstOrNull { it.id == selectedHostID } ?: hostsWithMetrics.first()
-    val samples = remember(feed.metrics, selectedHost.id, feed.generatedAt, selectedWindow) {
-        trendMetrics(feed.metrics, selectedHost.id, feed.generatedAt, selectedWindow)
-    }
-    val selectedSample = remember(samples, selectedTimestampMillis) {
-        selectedTimestampMillis
-            ?.let(Instant::ofEpochMilli)
-            ?.let { nearestTrendMetric(samples, it) }
-            ?: samples.lastOrNull()
-    }
-    val coverage = feed.metricsWindowHours?.let { "Source history: ${it}h" } ?: "Source history window not reported"
-    val cadence = feed.metricsSampleIntervalSeconds?.let { "every ${formatTrendDuration(it.toLong())}" } ?: "cadence not reported"
-
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            SectionHeading(
-                title = "Trends",
-                subtitle = "$coverage · $cadence · ${feed.metrics.size} fleet samples",
-            )
-        }
-        item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(hostsWithMetrics, key = FleetHost::id) { host ->
-                    FilterChip(
-                        selected = host.id == selectedHost.id,
-                        onClick = {
-                            selectedHostID = host.id
-                            selectedTimestampMillis = null
-                        },
-                        label = { Text(host.name, maxLines = 1) },
-                    )
-                }
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TrendWindow.entries.forEach { window ->
-                    FilterChip(
-                        selected = selectedWindow == window,
-                        onClick = {
-                            selectedWindow = window
-                            selectedTimestampMillis = null
-                        },
-                        label = { Text(window.label) },
-                    )
-                }
-            }
-        }
-        item {
-            TrendSummary(
-                hostName = selectedHost.name,
-                samples = samples,
-                window = selectedWindow,
-                endAt = feed.generatedAt,
-                sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
-            )
-        }
-        selectedSample?.let { sample ->
-            item { TrendSelectionReadout(sample) }
-        }
-        item {
-            TrendChartCard(
-                title = "Network quality",
-                subtitle = "Ping RTT and jitter",
-                samples = samples,
-                endAt = feed.generatedAt,
-                window = selectedWindow,
-                sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
-                selectedSample = selectedSample,
-                onSelectTimestamp = { selectedTimestampMillis = it.toEpochMilli() },
-                definitions = listOf(
-                    TrendDefinition("Ping", MaterialTheme.colorScheme.secondary) { it.pingMs },
-                    TrendDefinition("Jitter", MaterialTheme.colorScheme.primary) { it.jitterMs },
-                ),
-                unit = "ms",
-            )
-        }
-        item {
-            TrendChartCard(
-                title = "Connection timing",
-                subtitle = "SSH ready versus the complete probe",
-                samples = samples,
-                endAt = feed.generatedAt,
-                window = selectedWindow,
-                sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
-                selectedSample = selectedSample,
-                onSelectTimestamp = { selectedTimestampMillis = it.toEpochMilli() },
-                definitions = listOf(
-                    TrendDefinition("SSH ready", MaterialTheme.colorScheme.primary) { it.sshReadyMs },
-                    TrendDefinition("Full probe", MaterialTheme.colorScheme.tertiary) { it.fullProbeMs },
-                ),
-                unit = "ms",
-            )
-        }
-        item {
-            TrendChartCard(
-                title = "Resource usage",
-                subtitle = "Disk and memory used",
-                samples = samples,
-                endAt = feed.generatedAt,
-                window = selectedWindow,
-                sampleIntervalSeconds = feed.metricsSampleIntervalSeconds,
-                selectedSample = selectedSample,
-                onSelectTimestamp = { selectedTimestampMillis = it.toEpochMilli() },
-                definitions = listOf(
-                    TrendDefinition("Disk", MaterialTheme.colorScheme.tertiary) { it.diskPercent },
-                    TrendDefinition("Memory", MaterialTheme.colorScheme.primary) { it.memoryPercent },
-                ),
-                unit = "%",
-                fixedMaximum = 100.0,
-            )
-        }
-        item { Spacer(Modifier.height(8.dp)) }
-    }
-}
-
-@Composable
-private fun TrendSummary(
-    hostName: String,
-    samples: List<HostMetric>,
-    window: TrendWindow,
-    endAt: Instant,
-    sampleIntervalSeconds: Int?,
-) {
-    val ping = averageTrendValue(samples, HostMetric::pingMs)
-    val ready = averageTrendValue(samples, HostMetric::sshReadyMs)
-    val loss = averageTrendValue(samples, HostMetric::packetLossPercent)
-    val coverage = trendCoveragePercent(samples, window, sampleIntervalSeconds)
-    val freshness = samples.lastOrNull()?.let { Duration.between(it.capturedAt, endAt).seconds.coerceAtLeast(0) }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(hostName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text(
-                buildString {
-                    append("${samples.size} ordered sample${if (samples.size == 1) "" else "s"} in ${window.label}")
-                    coverage?.let { append(" · $it% coverage") }
-                    freshness?.let { append(" · latest ${formatTrendDuration(it)} ago") }
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TrendValueChip("Avg ping", ping?.let { "${formatDecimal(it)} ms" } ?: "—")
-                TrendValueChip("Avg ready", ready?.let { "${formatDecimal(it)} ms" } ?: "—")
-                TrendValueChip("Avg loss", loss?.let { "${formatDecimal(it)}%" } ?: "—")
-            }
-        }
-    }
-}
-
-@Composable
-private fun TrendValueChip(label: String, value: String) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(12.dp)) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-        }
-    }
-}
-
-@Composable
-private fun TrendSelectionReadout(sample: HostMetric) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f))) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Selected check", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                Text(
-                    DateTimeFormatter.ofPattern("MMM d, HH:mm:ss").withZone(ZoneId.systemDefault()).format(sample.capturedAt),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                sample.state.replaceFirstChar(Char::uppercase),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                sample.pingMs?.let { TrendValueChip("Ping", "${formatDecimal(it)} ms") }
-                sample.jitterMs?.let { TrendValueChip("Jitter", "${formatDecimal(it)} ms") }
-                sample.packetLossPercent?.let { TrendValueChip("Loss", "${formatDecimal(it)}%") }
-                sample.sshReadyMs?.let { TrendValueChip("SSH ready", "${formatDecimal(it)} ms") }
-                sample.fullProbeMs?.let { TrendValueChip("Full probe", "${formatDecimal(it)} ms") }
-                sample.diskPercent?.let { TrendValueChip("Disk", "${formatDecimal(it)}%") }
-                sample.memoryPercent?.let { TrendValueChip("Memory", "${formatDecimal(it)}%") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TrendChartCard(
-    title: String,
-    subtitle: String,
-    samples: List<HostMetric>,
-    endAt: Instant,
-    window: TrendWindow,
-    sampleIntervalSeconds: Int?,
-    selectedSample: HostMetric?,
-    onSelectTimestamp: (Instant) -> Unit,
-    definitions: List<TrendDefinition>,
-    unit: String,
-    fixedMaximum: Double? = null,
-) {
-    val values = definitions.flatMap { definition -> samples.mapNotNull(definition.value) }
-    val maximum = fixedMaximum ?: values.maxOrNull()?.let { (it * 1.12).coerceAtLeast(1.0) }
-    val startAt = endAt.minus(Duration.ofHours(window.hours.toLong()))
-    val totalSeconds = Duration.between(startAt, endAt).seconds.coerceAtLeast(1)
-    val gapThresholdSeconds = trendGapThresholdSeconds(window, sampleIntervalSeconds)
-    val selectionColor = MaterialTheme.colorScheme.onSurface
-    val chartModifier = Modifier
-        .fillMaxWidth()
-        .height(150.dp)
-        .pointerInput(startAt, endAt, onSelectTimestamp) {
-            fun selectAt(horizontalPosition: Float) {
-                if (size.width <= 0) return
-                val fraction = (horizontalPosition / size.width.toFloat()).coerceIn(0f, 1f)
-                val selectedSeconds = (totalSeconds * fraction).toLong()
-                onSelectTimestamp(startAt.plusSeconds(selectedSeconds))
-            }
-            awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false)
-                selectAt(down.position.x)
-                do {
-                    val event = awaitPointerEvent()
-                    event.changes.firstOrNull()?.let { change ->
-                        selectAt(change.position.x)
-                        change.consume()
-                    }
-                } while (event.changes.any { it.pressed })
-            }
-        }
-
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column {
-                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                maximum?.let {
-                    Text("Scale ${formatDecimal(it)} $unit", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            if (maximum == null) {
-                Text(
-                    "No values in this window",
-                    modifier = Modifier.padding(vertical = 44.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                val gridColor = MaterialTheme.colorScheme.outlineVariant
-                Canvas(modifier = chartModifier) {
-                    val top = 8f
-                    val bottom = size.height - 8f
-                    repeat(4) { index ->
-                        val y = top + (bottom - top) * index / 3f
-                        drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-                    }
-                    definitions.forEach { definition ->
-                        var previousPoint: Offset? = null
-                        var previousAt: Instant? = null
-                        samples.forEach { sample ->
-                            val value = definition.value(sample)
-                            if (value == null) {
-                                previousPoint = null
-                                previousAt = null
-                            } else {
-                                val elapsed = Duration.between(startAt, sample.capturedAt).seconds
-                                val x = (elapsed.toDouble() / totalSeconds.toDouble()).coerceIn(0.0, 1.0).toFloat() * size.width
-                                val yFraction = (value / maximum).coerceIn(0.0, 1.0).toFloat()
-                                val point = Offset(x, bottom - yFraction * (bottom - top))
-                                val previousTimestamp = previousAt
-                                if (previousPoint != null && previousTimestamp != null &&
-                                    Duration.between(previousTimestamp, sample.capturedAt).seconds <= gapThresholdSeconds
-                                ) {
-                                    drawLine(
-                                        definition.color,
-                                        previousPoint!!,
-                                        point,
-                                        strokeWidth = 4f,
-                                        cap = StrokeCap.Round,
-                                    )
-                                }
-                                val isSelected = sample.capturedAt == selectedSample?.capturedAt
-                                drawCircle(definition.color, radius = if (isSelected) 6f else 3.5f, center = point)
-                                previousPoint = point
-                                previousAt = sample.capturedAt
-                            }
-                        }
-                    }
-                    selectedSample?.let { selected ->
-                        val elapsed = Duration.between(startAt, selected.capturedAt).seconds
-                        val x = (elapsed.toDouble() / totalSeconds.toDouble()).coerceIn(0.0, 1.0).toFloat() * size.width
-                        drawLine(
-                            selectionColor.copy(alpha = 0.55f),
-                            Offset(x, top),
-                            Offset(x, bottom),
-                            strokeWidth = 2f,
-                        )
-                    }
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(dateTime(startAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(dateTime(endAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text("Tap or drag across any chart to inspect the nearest recorded check.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                definitions.forEach { definition ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(color = definition.color, shape = CircleShape, modifier = Modifier.size(8.dp)) {}
-                        Spacer(Modifier.width(5.dp))
-                        Text(definition.label, style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun UpdatesScreen(
-    state: FleetUiState,
-    onCheckForUpdates: () -> Unit,
-    onRequestUpdate: (ControlAction, List<String>) -> Unit,
-    onDismissJob: () -> Unit,
-) {
-    val feed = state.updatesFeed
-    if (feed == null) {
-        EmptyState(Icons.Outlined.SystemUpdateAlt, "No update data", "Connect a feed to view fleet update status.")
-        return
-    }
-    val ready = state.controlJobReady
-    val recentReceipts = recentOperationReceipts(
-        jobs = state.controlStatus?.recentJobs.orEmpty(),
-        activeJobId = state.activeJob?.id ?: state.controlStatus?.activeJobId,
-    )
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item { UpdateCheckCard(state, onCheckForUpdates) }
-        state.activeJob?.let { job ->
-            item { JobProgressCard(job, state.jobError, onDismissJob) }
-        }
-        if (recentReceipts.isNotEmpty()) {
-            item { RecentOperationsSection(recentReceipts) }
-        }
-        if (state.activeJob == null && state.jobError != null) {
-            item {
-                ControlMessageCard(
-                    state.jobError,
-                    error = !state.jobError.startsWith("Waiting for the current fleet operation"),
-                )
-            }
-        }
-        if (state.controlStatus == null) {
-            item {
-                ControlMessageCard(
-                    when {
-                        state.controlChecking -> "Checking paired update controller…"
-                        state.controlEndpoint != null -> controllerAvailabilityNotice(state)
-                            ?: "The paired update controller is not ready yet. Fleet status remains available."
-                        else -> "Pair an observer in Settings to initiate updates. Status remains available without pairing."
-                    },
-                )
-            }
-        } else if (!state.controlStatus.commandAuthorityEnabled) {
-            item { ControlMessageCard("Remote commands are disabled on the paired observer.") }
-        } else if (!state.controlStatus.jobJournalAvailable) {
-            item { ControlMessageCard("The paired controller cannot durably record jobs, so updates are disabled.", error = true) }
-        } else if (state.connection != FeedConnection.LIVE) {
-            item { ControlMessageCard("Updates are disabled until a live fleet snapshot is available.") }
-        }
-        ControlAction.entries.filter { it.isUpdate }.forEach { action ->
-            item {
-                UpdateActionSection(
-                    action = action,
-                    feed = feed,
-                    capabilities = state.controlStatus?.capabilities.orEmpty(),
-                    enabled = ready,
-                    onRequestUpdate = onRequestUpdate,
-                )
-            }
-        }
-        item {
-            RestartActionSection(
-                feed = feed,
-                capabilities = state.controlStatus?.capabilities.orEmpty(),
-                enabled = ready,
-                onRequestRestart = onRequestUpdate,
-            )
-        }
-        item {
-            SectionHeading(
-                title = "Linux package status",
-                subtitle = "Latest snapshot from ${feed.observer.name}",
-            )
-        }
-        val updates = feed.linuxUpdates.sortedWith(compareByDescending<LinuxUpdate> { it.availableCount }.thenBy { it.hostName.lowercase() })
-        if (updates.isEmpty()) {
-            item { InlineEmpty("No Linux machines in this feed") }
-        } else {
-            items(updates, key = LinuxUpdate::hostId) { update -> UpdateCard(update) }
-        }
-    }
-}
-
-@Composable
-private fun UpdateCheckCard(state: FleetUiState, onCheckForUpdates: () -> Unit) {
-    val status = state.controlStatus
-    val localCheck = state.activeCheck
-    val updateCenter = updateCenterPresentation(status)
-    val running = state.updateCheckSubmitting || localCheck?.state?.isTerminal == false || status?.checkingUpdates == true
-    val canCheck = state.connection == FeedConnection.LIVE &&
-        status?.commandAuthorityEnabled == true &&
-        !running &&
-        !status.busy &&
-        state.activeJob?.state?.isTerminal != false
-    val resultTone = when (localCheck?.state) {
-        ControlCheckState.FAILED, ControlCheckState.PARTIAL, ControlCheckState.CANCELLED ->
-            MaterialTheme.colorScheme.errorContainer
-        ControlCheckState.SUCCEEDED -> MaterialTheme.colorScheme.secondaryContainer
-        ControlCheckState.QUEUED, ControlCheckState.RUNNING -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.surfaceContainer
-    }
-    Card(colors = CardDefaults.cardColors(containerColor = resultTone)) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Update Center", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(
-                        updateCenter.headline,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    val checkStatus = when {
-                        state.updateCheckSubmitting -> "Starting a live check…"
-                        localCheck?.state == ControlCheckState.QUEUED -> "Live check queued${localCheck.phase.asPhaseSuffix()}"
-                        localCheck?.state == ControlCheckState.RUNNING -> "Checking${localCheck.phase.asPhaseSuffix()}"
-                        status?.checkingUpdates == true -> "Controller is checking…"
-                        localCheck?.state == ControlCheckState.SUCCEEDED -> "Live check complete"
-                        localCheck?.state == ControlCheckState.PARTIAL -> "Check complete with some failures"
-                        localCheck?.state == ControlCheckState.FAILED -> "Live check failed"
-                        localCheck?.state == ControlCheckState.CANCELLED -> "Live check cancelled"
-                        else -> null
-                    }
-                    checkStatus?.let {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                FilledTonalButton(onClick = onCheckForUpdates, enabled = canCheck) {
-                    if (running) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                    } else {
-                        Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Text(if (running) "Checking…" else "Check all")
-                }
-            }
-            val progressPresentation = checkProgressPresentation(localCheck)
-            when {
-                progressPresentation.fraction != null -> {
-                    LinearProgressIndicator(
-                        progress = { progressPresentation.fraction },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                running -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
-            progressPresentation.countLabel?.let { countLabel ->
-                Text(
-                    countLabel,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            progressPresentation.currentLabel?.let { currentLabel ->
-                Text(currentLabel, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-            }
-            progressPresentation.currentDetail?.let { currentDetail ->
-                Text(
-                    currentDetail,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            VersionCheckRow(
-                title = "Codex CLI",
-                latest = releaseVersionLabel(
-                    version = status?.latestCodexCliVersion,
-                    failed = status?.codexCliCheckFailed == true,
-                ),
-                checkedAt = status?.codexCliCheckedAt,
-                failed = status?.codexCliCheckFailed == true,
-            )
-            VersionCheckRow(
-                title = "ChatGPT Desktop App",
-                latest = releaseVersionLabel(
-                    version = status?.latestCodexDesktopAppVersion,
-                    build = status?.latestCodexDesktopAppBuild,
-                    failed = status?.codexDesktopAppCheckFailed == true,
-                ),
-                checkedAt = status?.codexDesktopAppCheckedAt,
-                failed = status?.codexDesktopAppCheckFailed == true,
-                scope = "macOS latest · Linux checked per machine",
-            )
-            val linuxSummary = linuxCheckPresentation(state.updatesFeed?.linuxUpdates.orEmpty())
-            VersionCheckRow(
-                title = "Linux packages",
-                latest = linuxSummary.countLabel,
-                checkedAt = linuxSummary.oldestCheckedAt,
-                failed = linuxSummary.incomplete,
-                failureLabel = "Check incomplete",
-            )
-            localCheck?.detail?.takeIf(String::isNotBlank)?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall)
-            }
-            state.updateCheckError?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            }
-        }
-    }
-}
-
-internal data class UpdateCenterPresentation(
-    val actionableUpdateCount: Int,
-    val restartRequiredCount: Int,
-    val checkRequiredCount: Int,
-    val offlineCount: Int,
-    val notInstalledCount: Int,
-    val hasManagedTargets: Boolean,
-    val controllerAvailable: Boolean,
-) {
-    val headline: String
-        get() {
-            if (!controllerAvailable) return "Pair to load update status"
-            if (!hasManagedTargets) return "No managed update targets"
-            val parts = buildList {
-                if (actionableUpdateCount > 0) {
-                    add("$actionableUpdateCount update${if (actionableUpdateCount == 1) "" else "s"} available")
-                }
-                if (restartRequiredCount > 0) {
-                    add("$restartRequiredCount restart${if (restartRequiredCount == 1) "" else "s"} required")
-                }
-                if (checkRequiredCount > 0) {
-                    add("$checkRequiredCount check${if (checkRequiredCount == 1) "" else "s"} needed")
-                }
-                if (offlineCount > 0) add("$offlineCount offline")
-                if (notInstalledCount > 0) add("$notInstalledCount not installed")
-            }
-            return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "All checked · no updates"
-        }
-}
-
-internal fun updateCenterPresentation(status: ControlStatus?): UpdateCenterPresentation {
-    val capabilities = status?.capabilities.orEmpty()
-    val uniqueCapabilities = capabilities.distinctBy(ControlCapability::hostId)
-    val managed = uniqueCapabilities.filter { capability ->
-        capability.actions.any { action -> action.isUpdate || action == ControlAction.RESTART_LINUX }
-    }
-    val actionableUpdates = managed.sumOf { capability ->
-        ControlAction.entries.count { action -> action.isUpdate && capability.eligibleFor(action) }
-    }
-    val restartRequired = managed.count { it.eligibleFor(ControlAction.RESTART_LINUX) }
-    var checkRequired = 0
-    var offline = 0
-    var notInstalled = 0
-    managed.forEach { capability ->
-        val supportsDesktopApp = ControlAction.CODEX_MAC_APP in capability.actions
-        val supportsCli = ControlAction.CODEX_CLI in capability.actions
-        val supportsLinuxStatus = ControlAction.LINUX_OS in capability.actions ||
-            ControlAction.RESTART_LINUX in capability.actions
-        val explicitlyOffline = capability.state.trim().lowercase() in setOf("offline", "unreachable", "down")
-        val desktopCheckOffline = supportsDesktopApp &&
-            capability.codexDesktopAppState == CodexDesktopAppState.OFFLINE
-        val cliFresh = !supportsCli ||
-            (status?.codexCliCheckedAt != null && !status.codexCliCheckFailed)
-        val linuxFresh = !supportsLinuxStatus || capability.linuxCheckedAt != null
-        val desktopFresh = !supportsDesktopApp || (
-            capability.codexDesktopAppCheckedAt != null &&
-                capability.codexDesktopAppState in setOf(
-                    CodexDesktopAppState.CURRENT,
-                    CodexDesktopAppState.UPDATE_AVAILABLE,
-                    CodexDesktopAppState.MISSING,
-                )
-            )
-        val needsCheck = (!capability.commandReachable && !explicitlyOffline) ||
-            !cliFresh || !linuxFresh || !desktopFresh
-        when {
-            explicitlyOffline || desktopCheckOffline -> offline += 1
-            needsCheck -> checkRequired += 1
-            supportsDesktopApp && capability.codexDesktopAppState == CodexDesktopAppState.MISSING ->
-                notInstalled += 1
-        }
-    }
-    return UpdateCenterPresentation(
-        actionableUpdateCount = actionableUpdates,
-        restartRequiredCount = restartRequired,
-        checkRequiredCount = checkRequired,
-        offlineCount = offline,
-        notInstalledCount = notInstalled,
-        hasManagedTargets = managed.isNotEmpty(),
-        controllerAvailable = status != null,
-    )
-}
-
-@Composable
-private fun VersionCheckRow(
-    title: String,
-    latest: String?,
-    checkedAt: Instant?,
-    failed: Boolean,
-    failureLabel: String = "Check failed",
-    scope: String? = null,
-) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.SemiBold)
-            scope?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(
-                latest ?: if (failed) "Latest version unavailable" else "Latest version not checked",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Text(
-            when {
-                checkedAt == null -> if (failed) failureLabel else "Not checked"
-                failed -> "Last attempt ${relativeTime(checkedAt)}"
-                else -> "Checked ${relativeTime(checkedAt)}"
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-private fun String?.asPhaseSuffix(): String = this?.trim()?.takeIf(String::isNotEmpty)?.let { " · ${it.replaceFirstChar(Char::uppercase)}" }.orEmpty()
-
-internal data class CheckProgressPresentation(
-    val fraction: Float?,
-    val countLabel: String?,
-    val currentLabel: String?,
-    val currentDetail: String?,
-)
-
-internal fun checkProgressPresentation(check: app.fleetlight.mobile.data.ControlCheck?): CheckProgressPresentation {
-    if (check == null) return CheckProgressPresentation(null, null, null, null)
-    val total = check.total?.takeIf { it > 0 }
-    val completed = check.completed?.coerceIn(0, total ?: Int.MAX_VALUE)
-    val current = check.progress.firstOrNull { it.state == app.fleetlight.mobile.data.ControlCheckProgressState.RUNNING }
-        ?: check.progress.firstOrNull { it.state == app.fleetlight.mobile.data.ControlCheckProgressState.QUEUED }
-        ?: check.progress.firstOrNull {
-            it.state == app.fleetlight.mobile.data.ControlCheckProgressState.FAILED ||
-                it.state == app.fleetlight.mobile.data.ControlCheckProgressState.PARTIAL
-        }
-        ?: check.progress.lastOrNull()
-    return CheckProgressPresentation(
-        fraction = if (total != null && completed != null) completed.toFloat() / total.toFloat() else null,
-        countLabel = if (total != null && completed != null) "$completed of $total stages complete" else null,
-        currentLabel = current?.let { "${it.name} · ${it.state.displayLabel}" },
-        currentDetail = current?.detail,
-    )
-}
-
-private val app.fleetlight.mobile.data.ControlCheckProgressState.displayLabel: String
-    get() = name.lowercase().replaceFirstChar(Char::uppercase)
-
-internal data class LinuxCheckPresentation(
-    val checkedCount: Int,
-    val totalCount: Int,
-    val incomplete: Boolean,
-    val oldestCheckedAt: Instant?,
-) {
-    val countLabel: String?
-        get() = if (totalCount == 0) null else
-            "$checkedCount of $totalCount machine${if (totalCount == 1) "" else "s"} checked"
-}
-
-internal fun linuxCheckPresentation(updates: List<LinuxUpdate>): LinuxCheckPresentation {
-    val verified = updates.filter { update ->
-        update.checkedAt != null && update.state.normalizedLinuxState() in LINUX_VERIFIED_STATES
-    }
-    val complete = updates.isNotEmpty() && verified.size == updates.size
-    return LinuxCheckPresentation(
-        checkedCount = verified.size,
-        totalCount = updates.size,
-        incomplete = updates.isNotEmpty() && !complete,
-        oldestCheckedAt = verified.mapNotNull(LinuxUpdate::checkedAt).minOrNull().takeIf { complete },
-    )
-}
-
-private fun String.normalizedLinuxState(): String = lowercase().replace("-", "").replace("_", "")
-
-private val LINUX_VERIFIED_STATES = setOf("current", "updateavailable", "updatesavailable")
-
-internal val FleetUiState.updatesFeed: MobileFeed?
-    get() = controllerFeed ?: feed
-
-internal val FleetUiState.controlJobReady: Boolean
-    get() {
-        val status = controlStatus ?: return false
-        return connection == FeedConnection.LIVE &&
-            controlEndpoint != null &&
-            status.commandAuthorityEnabled &&
-            status.jobJournalAvailable &&
-            !status.busy &&
-            !status.checkingUpdates &&
-            !updateCheckSubmitting &&
-            !checkSyncPending &&
-            activeCheck?.state?.isTerminal != false &&
-            activeJob?.state?.isTerminal != false
-    }
-
-internal fun controllerAvailabilityNotice(
-    state: FleetUiState,
-    includeDetail: Boolean = false,
-): String? {
-    if (state.controlEndpoint == null || state.controlChecking || state.controllerAvailabilityError == null) return null
-    val statusContext = if (state.connection == FeedConnection.LIVE) {
-        "Fleet status is live. "
-    } else {
-        "Fleet status remains available separately. "
-    }
-    val message = "${statusContext}The paired update controller is temporarily unavailable."
-    return if (includeDetail) "$message Technical detail: ${state.controllerAvailabilityError}" else message
-}
-
-internal fun releaseVersionLabel(version: String?, build: String? = null, failed: Boolean): String? {
-    val prefix = if (failed) "Last known" else "Latest"
-    return when {
-        version != null -> listOfNotNull("$prefix $version", build?.let { "build $it" }).joinToString(" · ")
-        build != null -> "$prefix build $build"
-        else -> null
-    }
-}
-
-@Composable
-private fun UpdateActionSection(
-    action: ControlAction,
-    feed: MobileFeed,
-    capabilities: List<ControlCapability>,
-    enabled: Boolean,
-    onRequestUpdate: (ControlAction, List<String>) -> Unit,
-) {
-    val supported = capabilities.filter { action in it.actions }.sortedBy { it.hostName.lowercase() }
-    val available = supported.filter { it.eligibleFor(action) }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(action.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    val availability = updateAvailabilitySummary(action, capabilities, supported, available)
-                    Text(
-                        listOfNotNull(action.platformScope, availability).joinToString(" · "),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                FilledTonalButton(
-                    onClick = { onRequestUpdate(action, available.map { it.hostId }) },
-                    enabled = enabled && available.isNotEmpty(),
-                ) {
-                    Text(updateAllButtonLabel(action, supported, available))
-                }
-            }
-            supported.forEach { capability ->
-                val installed = feed.installedVersion(capability.hostId, action, capability)
-                val unavailable = capability.isUnavailable
-                val host = feed.hosts.firstOrNull { it.id == capability.hostId }
-                val platform = (
-                    capability.codexDesktopAppPlatform?.desktopAppPlatformLabel()
-                        ?: host?.desktopAppPlatformLabel
-                    ).takeIf { action == ControlAction.CODEX_MAC_APP }
-                val availableVersion = (
-                    capability.codexDesktopAppAvailableVersion ?: host?.codexDesktopAppAvailableVersion
-                    ).takeIf {
-                    action == ControlAction.CODEX_MAC_APP && capability.updateAvailable(action)
-                }
-                val installedLabel = when {
-                    installed != null -> installed
-                    action == ControlAction.CODEX_MAC_APP && capability.desktopAppKnownNotInstalled -> "Not installed"
-                    else -> "Installed version unavailable"
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(capability.safeHostName(), fontWeight = FontWeight.SemiBold)
-                        Text(
-                            listOfNotNull(
-                                platform,
-                                installedLabel,
-                                capability.controllerUpdateReport(action, installed, availableVersion),
-                                desktopAppFreshnessLabel(action, capability, host),
-                            ).joinToString(" · "),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    FilledTonalButton(
-                        onClick = { onRequestUpdate(action, listOf(capability.hostId)) },
-                        enabled = enabled && capability.updateAvailable(action) && !unavailable,
-                    ) {
-                        Text(capability.updateButtonLabel(action, installed))
-                    }
-                }
-            }
-            if (supported.isEmpty()) {
-                Text(
-                    if (capabilities.isEmpty()) "Machine status loads after pairing" else "No machines support ${action.title}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            val inconsistent = capabilities.filter { it.updateAvailable(action) && action !in it.actions }
-            if (inconsistent.isNotEmpty()) {
-                Text(
-                    "Controller status is inconsistent for ${inconsistent.joinToString { it.safeHostName() }}. " +
-                        "Refresh or check the controller before updating.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RestartActionSection(
-    feed: MobileFeed,
-    capabilities: List<ControlCapability>,
-    enabled: Boolean,
-    onRequestRestart: (ControlAction, List<String>) -> Unit,
-) {
-    val linuxMachines = capabilities
-        .filter { ControlAction.LINUX_OS in it.actions || ControlAction.RESTART_LINUX in it.actions }
-        .sortedBy { it.hostName.lowercase() }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column {
-                Text("Restart Linux", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text(
-                    "Restart one machine at a time after reviewing the interruption warning",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            linuxMachines.forEach { capability ->
-                val canRestart = ControlAction.RESTART_LINUX in capability.actions && capability.restartRequired
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(capability.safeHostName(), fontWeight = FontWeight.SemiBold)
-                        Text(
-                            listOf(
-                                feed.installedVersion(capability.hostId, ControlAction.LINUX_OS)
-                                    ?: "Installed version unavailable",
-                                capability.controllerRestartReport,
-                            ).joinToString(" · "),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    FilledTonalButton(
-                        onClick = { onRequestRestart(ControlAction.RESTART_LINUX, listOf(capability.hostId)) },
-                        enabled = enabled && canRestart && !capability.isUnavailable,
-                    ) {
-                        Text(
-                            when {
-                                capability.isUnavailable || ControlAction.RESTART_LINUX !in capability.actions -> "Unavailable"
-                                capability.restartRequired -> "Restart"
-                                else -> "Not required"
-                            },
-                        )
-                    }
-                }
-            }
-            if (linuxMachines.isEmpty()) {
-                Text(
-                    if (capabilities.isEmpty()) "Machine status loads after pairing" else "No Linux machines support remote restart",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun JobProgressCard(job: ControlJob, error: String?, onDismiss: () -> Unit) {
-    val terminal = job.state.isTerminal
-    val tone = when (job.state) {
-        ControlJobState.FAILED, ControlJobState.PARTIAL -> MaterialTheme.colorScheme.errorContainer
-        ControlJobState.SUCCEEDED -> MaterialTheme.colorScheme.secondaryContainer
-        else -> MaterialTheme.colorScheme.primaryContainer
-    }
-    Card(colors = CardDefaults.cardColors(containerColor = tone)) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (!terminal) {
-                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(10.dp))
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("${job.action.title} · ${job.state.name.lowercase().replaceFirstChar(Char::uppercase)}", fontWeight = FontWeight.Bold)
-                    Text("${job.completedCount} of ${job.total} machines complete", style = MaterialTheme.typography.bodySmall)
-                }
-                if (terminal) TextButton(onClick = onDismiss) { Text("Done") }
-            }
-            job.targets.forEach { target ->
-                Text(
-                    "${target.hostName}: ${target.displayProgress}${target.message?.let { " · $it" }.orEmpty()}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-        }
-    }
-}
-
-@Composable
-private fun RecentOperationsSection(jobs: List<ControlJob>) {
-    var expandedJobId by rememberSaveable { mutableStateOf<String?>(null) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionHeading(
-            title = "Recent operations",
-            subtitle = "Read-only receipts from the paired controller",
-        )
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-            Column {
-                jobs.forEachIndexed { index, job ->
-                    val expanded = expandedJobId == job.id
-                    Column(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                if (job.state == ControlJobState.SUCCEEDED) Icons.Outlined.CheckCircle else Icons.Outlined.WarningAmber,
-                                contentDescription = null,
-                                tint = if (job.state == ControlJobState.SUCCEEDED) {
-                                    MaterialTheme.colorScheme.secondary
-                                } else {
-                                    MaterialTheme.colorScheme.tertiary
-                                },
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "${job.action.title} · ${job.state.displayLabel}",
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                Text(
-                                    listOfNotNull(
-                                        operationReceiptSummary(job),
-                                        job.receiptTimestamp?.let { relativeTime(it) },
-                                    ).joinToString(" · "),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            TextButton(
-                                onClick = { expandedJobId = if (expanded) null else job.id },
-                            ) {
-                                Text(if (expanded) "Hide" else "Details")
-                            }
-                        }
-                        if (expanded) {
-                            job.message?.takeIf(String::isNotBlank)?.let {
-                                Text(it, style = MaterialTheme.typography.bodySmall)
-                            }
-                            if (job.targets.isEmpty()) {
-                                Text(
-                                    "Per-machine details were not reported",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            } else {
-                                job.targets.forEach { target ->
-                                    Text(
-                                        "${target.hostName}: ${target.displayProgress}${target.message?.let { " · $it" }.orEmpty()}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    if (index < jobs.lastIndex) HorizontalDivider()
-                }
-            }
-        }
-    }
-}
-
-internal fun recentOperationReceipts(
-    jobs: List<ControlJob>,
-    activeJobId: String?,
-): List<ControlJob> = jobs.asSequence()
-    .filter { it.state.isTerminal && it.id != activeJobId }
-    .sortedWith(
-        compareByDescending<ControlJob> { it.receiptTimestamp ?: Instant.MIN }
-            .thenByDescending(ControlJob::id),
-    )
-    .distinctBy(ControlJob::id)
-    .take(MAX_RECENT_OPERATION_RECEIPTS)
-    .toList()
-
-internal fun operationReceiptSummary(job: ControlJob): String {
-    val counts = job.receiptCounts()
-    return buildList {
-        if (counts.succeeded > 0) add("${counts.succeeded} succeeded")
-        if (counts.failed > 0) add("${counts.failed} failed")
-        if (counts.offline > 0) add("${counts.offline} offline")
-        if (counts.skipped > 0) add("${counts.skipped} skipped")
-        if (counts.cancelled > 0) add("${counts.cancelled} cancelled")
-        if (counts.pending > 0) add("${counts.pending} pending")
-    }.joinToString(" · ").ifBlank { "No machine results reported" }
-}
-
-private val ControlJobState.displayLabel: String
-    get() = name.lowercase().replaceFirstChar(Char::uppercase)
-
-private const val MAX_RECENT_OPERATION_RECEIPTS = 5
-
-@Composable
-private fun ControlMessageCard(text: String, error: Boolean = false) {
-    Card(colors = CardDefaults.cardColors(containerColor = if (error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer)) {
-        Text(text, modifier = Modifier.fillMaxWidth().padding(16.dp), style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-@Composable
-private fun UpdateCard(update: LinuxUpdate) {
-    val normalizedState = update.state.trim().lowercase().replace("-", "").replace("_", "")
-    val needsAttention = update.restartRequired || update.availableCount > 0 ||
-        normalizedState in setOf("failed", "error", "offline", "accessissue", "packagestale")
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (needsAttention) Icons.Outlined.WarningAmber else Icons.Outlined.CheckCircle,
-                    contentDescription = null,
-                    tint = if (needsAttention) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary,
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(update.hostName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        buildList {
-                            add(linuxUpdateStateLabel(update.state))
-                            update.packageManager?.let(::add)
-                        }.joinToString(" · "),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (update.availableCount > 0) SummaryChip("updates", update.availableCount, MaterialTheme.colorScheme.primaryContainer)
-                if (update.restartRequired) SummaryChip("restart", 1, MaterialTheme.colorScheme.tertiaryContainer)
-            }
-            update.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            update.checkedAt?.let {
-                Text("Checked ${relativeTime(it)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-internal fun linuxUpdateStateLabel(state: String): String = when (
-    state.trim().lowercase().replace("-", "").replace("_", "")
-) {
-    "current" -> "Packages current"
-    "updateavailable", "updatesavailable" -> "Updates available"
-    "offline" -> "Offline"
-    "accessissue" -> "Access issue"
-    "connectionchecking" -> "Checking connection"
-    "checking", "packagechecking" -> "Checking packages"
-    "packagestale" -> "Package check stale"
-    "notchecked" -> "Not checked"
-    "failed", "error" -> "Check failed"
-    else -> state.replaceFirstChar(Char::uppercase)
-}
-
-@Composable
-private fun EventsScreen(feed: MobileFeed?) {
-    if (feed == null) {
-        EmptyState(Icons.Outlined.Event, "No events yet", "Connect a feed to see confirmed incidents and recoveries.")
-        return
-    }
-    val events = feed.incidents.sortedByDescending(FleetIncident::startedAt)
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item { SectionHeading("Events", "${events.size} recent event${if (events.size == 1) "" else "s"}") }
-        if (events.isEmpty()) item { InlineEmpty("No confirmed incidents") }
-        items(events, key = FleetIncident::id) { EventCard(it) }
-    }
-}
-
-@Composable
-private fun EventCard(event: FleetIncident) {
-    val needsAttention = event.severity.lowercase() in setOf("warning", "error", "critical")
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        ListItem(
-            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = Color.Transparent),
-            leadingContent = {
-                StatusOrb(healthy = !needsAttention, Modifier.size(34.dp), if (needsAttention) HostState.ATTENTION else HostState.ONLINE)
-            },
-            headlineContent = { Text(event.title, fontWeight = FontWeight.SemiBold) },
-            supportingContent = {
-                Column {
-                    Text("${event.hostName} · ${event.kind.replaceFirstChar(Char::uppercase)}")
-                    event.detail?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                    Text(dateTime(event.startedAt), style = MaterialTheme.typography.labelSmall)
-                }
-            },
-            trailingContent = {
-                Text(
-                    event.severity.replaceFirstChar(Char::uppercase),
-                    color = if (needsAttention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            },
-        )
-    }
-}
-
-@Composable
-private fun SettingsScreen(
-    state: FleetUiState,
-    onSaveEndpoints: (List<String>) -> Unit,
-    onStagePairing: (String, String) -> Unit,
-    onForgetControl: () -> Unit,
-) {
-    var drafts by rememberSaveable(state.endpoints) { mutableStateOf(state.endpoints.ifEmpty { listOf("") }) }
-    var validation by rememberSaveable { mutableStateOf<String?>(null) }
-    var pairingEndpoint by rememberSaveable(state.controlEndpoint, state.activeEndpoint) {
-        mutableStateOf(state.controlEndpoint ?: state.activeEndpoint ?: state.endpoints.firstOrNull().orEmpty())
-    }
-    var pairingCode by rememberSaveable { mutableStateOf("") }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        SectionHeading("Feed endpoints", "Fleetlight tries every endpoint and uses the freshest valid feed")
-        drafts.forEachIndexed { index, value ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = { updated -> drafts = drafts.toMutableList().also { it[index] = updated } },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("HTTPS endpoint ${index + 1}") },
-                    singleLine = true,
-                    isError = value.isNotBlank() && EndpointPolicy.normalize(value) == null,
-                )
-                if (drafts.size > 1 || value.isNotEmpty()) {
-                    IconButton(onClick = { drafts = drafts.toMutableList().also { it.removeAt(index) }.ifEmpty { listOf("") } }) {
-                        Icon(Icons.Outlined.DeleteOutline, contentDescription = "Remove endpoint")
-                    }
-                }
-            }
-        }
-        validation?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(
-                onClick = { drafts = drafts + "" },
-                enabled = drafts.size < EndpointPolicy.MAX_ENDPOINTS,
-            ) {
-                Icon(Icons.Outlined.Add, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("Add endpoint")
-            }
-            FilledTonalButton(onClick = {
-                val nonBlank = drafts.filter(String::isNotBlank)
-                if (nonBlank.any { EndpointPolicy.normalize(it) == null }) {
-                    validation = "Use complete HTTPS URLs without credentials or fragments."
-                } else {
-                    validation = null
-                    onSaveEndpoints(nonBlank)
-                }
-            }) {
-                Text("Save & refresh")
-            }
-        }
-
-        HorizontalDivider()
-        SectionHeading("Update controller", "The paired Mac runs allowlisted fleet jobs; credentials never leave it")
-        if (state.controlEndpoint != null) {
-            SettingsInfoCard(
-                icon = Icons.Outlined.Shield,
-                title = state.controlStatus?.controllerName ?: "Paired controller",
-                text = listOfNotNull(
-                    ControlEndpointPolicy.authorityForFeed(state.controlEndpoint),
-                    if (state.controlStatus?.commandAuthorityEnabled == true && state.controlStatus.jobJournalAvailable) "Commands ready" else "Commands unavailable",
-                ).joinToString(" · "),
-            )
-            OutlinedButton(onClick = onForgetControl, enabled = state.activeJob?.state?.isTerminal != false) {
-                Text("Forget controller on this phone")
-            }
-            Text(
-                "To invalidate the controller token everywhere, revoke this Android device from Fleetlight on the Mac.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            OutlinedTextField(
-                value = pairingEndpoint,
-                onValueChange = { pairingEndpoint = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Observer feed endpoint") },
-                singleLine = true,
-                isError = pairingEndpoint.isNotBlank() && EndpointPolicy.normalize(pairingEndpoint) == null,
-            )
-            OutlinedTextField(
-                value = pairingCode,
-                onValueChange = { pairingCode = it.filter(Char::isDigit).take(8) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("8-digit pairing code") },
-                singleLine = true,
-            )
-            FilledTonalButton(
-                onClick = { onStagePairing(pairingEndpoint, pairingCode) },
-                enabled = !state.pairing && EndpointPolicy.normalize(pairingEndpoint) != null && pairingCode.length == 8,
-            ) {
-                if (state.pairing) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(if (state.pairing) "Pairing…" else "Pair update controls")
-            }
-        }
-        state.controlError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-        controllerAvailabilityNotice(state, includeDetail = true)?.let {
-            Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-        }
-
-        HorizontalDivider()
-        SettingsInfoCard(
-            icon = Icons.Outlined.Computer,
-            title = "Versions",
-            text = "Android ${BuildConfig.VERSION_NAME} · Observer ${state.feed?.observer?.appVersion ?: "not reported"}",
-        )
-        SettingsInfoCard(
-            icon = Icons.Outlined.Shield,
-            title = "Scoped control by design",
-            text = "Fleet status stays read-only until you explicitly pair. Update requests contain only an allowlisted action and machine IDs; SSH and sudo credentials remain on the controller Mac.",
-        )
-        SettingsInfoCard(
-            icon = Icons.Outlined.Storage,
-            title = "Resilient refresh",
-            text = "All endpoints are checked every 60 seconds. The freshest schema 1 feed wins, and the last good response stays available offline.",
-        )
-        SettingsInfoCard(
-            icon = Icons.Outlined.AccessTime,
-            title = "Private configuration link",
-            text = "Propose endpoints with fleetlight://configure?endpoint=https%3A%2F%2Fexample.invalid%2Ffeed.json. Fleetlight asks before saving or contacting them.",
-        )
-        state.activeEndpoint?.let {
-            Text("Active source: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun SettingsInfoCard(icon: ImageVector, title: String, text: String) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.width(12.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(title, fontWeight = FontWeight.SemiBold)
-                Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectionHeading(title: String, subtitle: String) {
-    Column {
-        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun EmptyState(icon: ImageVector, title: String, message: String) {
+internal fun EmptyState(icon: ImageVector, title: String, message: String) {
     Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
                 Icon(icon, contentDescription = null, modifier = Modifier.padding(18.dp).size(36.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
             }
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                message,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
         }
     }
 }
 
 @Composable
-private fun InlineEmpty(text: String) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Text(text, modifier = Modifier.fillMaxWidth().padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+internal fun InlineEmpty(text: String) {
+    FleetCard {
+        Text(
+            text,
+            modifier = Modifier.fillMaxWidth().padding(24.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
     }
 }
 
 @Composable
-private fun StatusOrb(healthy: Boolean, modifier: Modifier, state: HostState = if (healthy) HostState.ONLINE else HostState.ATTENTION) {
+internal fun StatusOrb(healthy: Boolean, modifier: Modifier, state: HostState = if (healthy) HostState.ONLINE else HostState.ATTENTION) {
     val color = stateColor(state)
     Surface(modifier = modifier, shape = CircleShape, color = color.copy(alpha = 0.16f)) {
         Box(contentAlignment = Alignment.Center) {
@@ -2757,14 +492,6 @@ private fun StatusOrb(healthy: Boolean, modifier: Modifier, state: HostState = i
             )
         }
     }
-}
-
-@Composable
-private fun stateColor(state: HostState): Color = when (state) {
-    HostState.ONLINE -> MaterialTheme.colorScheme.secondary
-    HostState.SLOW -> MaterialTheme.colorScheme.tertiary
-    HostState.OFFLINE, HostState.ACCESS, HostState.ATTENTION -> MaterialTheme.colorScheme.error
-    HostState.UNKNOWN -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 private fun hostPriority(host: FleetHost): Int = when (host.state) {
@@ -2785,18 +512,13 @@ internal fun prioritizedFleetHosts(hosts: List<FleetHost>): List<FleetHost> = ho
 )
 
 private fun observerSubtitle(state: FleetUiState): String {
-    val observer = state.feed?.observer?.name ?: "Secure fleet companion"
-    val sourceVersion = state.feed?.observer?.appVersion?.let { "Observer $it" }
-    val connection = when (state.connection) {
-        FeedConnection.LIVE -> "Live"
-        FeedConnection.CACHED -> "Cached"
-        FeedConnection.ERROR -> "Feed unavailable"
-        FeedConnection.EMPTY -> null
-    }
-    return listOfNotNull(observer, sourceVersion, "Android ${BuildConfig.VERSION_NAME}", connection).joinToString(" · ")
+    val feed = state.feed ?: return "Secure fleet companion"
+    val snapshot = "snapshot ${relativeTime(feed.generatedAt)}"
+    val observer = feed.observer.appVersion?.let { "${feed.observer.name} $it" } ?: feed.observer.name
+    return "$observer · $snapshot"
 }
 
-private fun relativeTime(instant: Instant, now: Instant = Instant.now()): String {
+internal fun relativeTime(instant: Instant, now: Instant = Instant.now()): String {
     val seconds = Duration.between(instant, now).seconds.coerceAtLeast(0)
     return when {
         seconds < 20 -> "now"
@@ -2807,196 +529,94 @@ private fun relativeTime(instant: Instant, now: Instant = Instant.now()): String
     }
 }
 
-private fun dateTime(instant: Instant): String = DateTimeFormatter.ofPattern("MMM d, HH:mm")
+internal fun dateTime(instant: Instant): String = DateTimeFormatter.ofPattern("MMM d, HH:mm")
     .withZone(ZoneId.systemDefault())
     .format(instant)
 
-private fun formatDecimal(value: Double): String = if (value == value.roundToInt().toDouble()) {
+internal fun formatDecimal(value: Double): String = if (value == value.roundToInt().toDouble()) {
     value.roundToInt().toString()
 } else {
     "%.1f".format(value)
 }
 
-private val ControlCapability.isUnavailable: Boolean
-    get() = !commandReachable
+// ---------------------------------------------------------------------------
+// Sharing
+// ---------------------------------------------------------------------------
 
-internal fun updateAvailabilitySummary(
-    action: ControlAction,
-    capabilities: List<ControlCapability>,
-    supported: List<ControlCapability>,
-    available: List<ControlCapability>,
-): String {
-    if (capabilities.isEmpty()) return "Pair to load eligible machines"
-    if (action != ControlAction.CODEX_MAC_APP) {
-        return when {
-            supported.any { it.updateAvailable(action) } && available.isEmpty() -> "Controller check required"
-            available.isEmpty() -> "No update available"
-            else -> "${available.size} update${if (available.size == 1) "" else "s"} available"
-        }
-    }
-    val unknown = supported.count { !it.desktopAppStateKnown }
-    val missing = supported.count { it.codexDesktopAppState == CodexDesktopAppState.MISSING }
-    val offline = supported.count { it.codexDesktopAppState == CodexDesktopAppState.OFFLINE }
-    val unavailable = supported.count { it.codexDesktopAppState == CodexDesktopAppState.UNAVAILABLE }
-    return buildList {
-        if (available.isNotEmpty()) {
-            add("${available.size} update${if (available.size == 1) "" else "s"} available")
-        }
-        if (unknown > 0) add("$unknown check${if (unknown == 1) "" else "s"} required")
-        if (missing > 0) add("$missing not installed")
-        if (offline > 0) add("$offline offline")
-        if (unavailable > 0) add("$unavailable unavailable")
-        if (isEmpty() && supported.any { it.updateAvailable(action) }) add("Controller check required")
-        if (isEmpty()) add("No update available")
-    }.joinToString(" · ")
+internal fun shareText(context: Context, text: String?, title: String) {
+    if (text.isNullOrBlank()) return
+    val intent = Intent(Intent.ACTION_SEND)
+        .setType("text/plain")
+        .putExtra(Intent.EXTRA_SUBJECT, "Fleetlight · $title")
+        .putExtra(Intent.EXTRA_TEXT, text)
+    context.startActivity(Intent.createChooser(intent, title))
 }
 
-internal fun updateAllButtonLabel(
-    action: ControlAction,
-    supported: List<ControlCapability>,
-    available: List<ControlCapability>,
-): String = when {
-    action != ControlAction.CODEX_MAC_APP -> "Update all"
-    supported.none { !it.desktopAppStateKnown } -> "Update all"
-    available.isEmpty() -> "Check required"
-    else -> "Update known"
+private fun hostMarker(host: FleetHost): String = when (host.state) {
+    HostState.ONLINE -> if (host.issueTypes.isEmpty()) "OK" else "NOTE"
+    HostState.SLOW -> "SLOW"
+    HostState.OFFLINE -> "OFFLINE"
+    HostState.ACCESS -> "ACCESS"
+    HostState.ATTENTION -> "ALERT"
+    HostState.UNKNOWN -> "UNKNOWN"
 }
 
-internal fun ControlCapability.controllerUpdateReport(
-    action: ControlAction,
-    installedVersion: String? = null,
-    availableVersion: String? = null,
-): String = when {
-    state.equals("offline", ignoreCase = true) || state.equals("unreachable", ignoreCase = true) ->
-        "Controller reports offline"
-    isUnavailable -> "Controller check required"
-    action == ControlAction.CODEX_MAC_APP && codexDesktopAppState == CodexDesktopAppState.OFFLINE ->
-        "Desktop app check offline"
-    action == ControlAction.CODEX_MAC_APP && codexDesktopAppState == CodexDesktopAppState.UNAVAILABLE ->
-        "Desktop app unavailable"
-    action == ControlAction.CODEX_MAC_APP && desktopAppKnownNotInstalled -> "Not installed"
-    action == ControlAction.CODEX_MAC_APP && !desktopAppStateKnown -> "Check required"
-    updateAvailable(action) && availableVersion != null -> "Available $availableVersion"
-    updateAvailable(action) -> "Controller reports update available"
-    else -> "Controller reports current"
-}
-
-private val ControlCapability.controllerRestartReport: String
-    get() = when {
-        state.equals("offline", ignoreCase = true) || state.equals("unreachable", ignoreCase = true) ->
-            "Controller reports offline"
-        isUnavailable || ControlAction.RESTART_LINUX !in actions -> "Controller check required"
-        restartRequired -> "Controller reports restart required"
-        else -> "Controller reports restart not required"
-    }
-
-internal fun ControlCapability.updateButtonLabel(action: ControlAction, installedVersion: String?): String = when {
-    isUnavailable -> "Unavailable"
-    action == ControlAction.CODEX_MAC_APP && codexDesktopAppState == CodexDesktopAppState.OFFLINE -> "Offline"
-    action == ControlAction.CODEX_MAC_APP && codexDesktopAppState == CodexDesktopAppState.UNAVAILABLE -> "Unavailable"
-    action == ControlAction.CODEX_MAC_APP && desktopAppKnownNotInstalled -> "Not installed"
-    action == ControlAction.CODEX_MAC_APP && !desktopAppStateKnown -> "Check required"
-    updateAvailable(action) && action != ControlAction.LINUX_OS && installedVersion == null -> "Install"
-    updateAvailable(action) -> "Update"
-    else -> "Current"
-}
-
-private fun MobileFeed.installedVersion(
-    hostId: String,
-    action: ControlAction,
-    capability: ControlCapability? = null,
-): String? = when (action) {
-    ControlAction.CODEX_CLI -> hosts.firstOrNull { it.id == hostId }?.codexCliVersion?.let { "Installed $it" }
-    ControlAction.CODEX_MAC_APP -> {
-        if (capability?.desktopAppKnownNotInstalled == true) {
-            null
-        } else {
-            val host = hosts.firstOrNull { it.id == hostId }
-            val version = capability?.codexDesktopAppVersion ?: host?.codexDesktopAppVersion
-            val build = host?.codexDesktopAppBuild.takeIf {
-                capability?.codexDesktopAppVersion == null || capability.codexDesktopAppVersion == host?.codexDesktopAppVersion
+/** Plain-text fleet summary for the share sheet. Returns null when no feed is loaded. */
+internal fun fleetStatusSummary(state: FleetUiState, now: Instant = Instant.now()): String? {
+    val feed = state.feed ?: return null
+    val summary = feed.summary
+    return buildString {
+        appendLine("Fleetlight · ${feed.observer.name}")
+        appendLine("Snapshot ${dateTime(feed.generatedAt)} (${relativeTime(feed.generatedAt, now)})")
+        appendLine(
+            if (summary.issueCount == 0) {
+                "All ${summary.total} machines healthy"
+            } else {
+                "${summary.online} of ${summary.total} online · ${summary.issueCount} signal${if (summary.issueCount == 1) "" else "s"} need attention"
+            },
+        )
+        appendLine()
+        prioritizedFleetHosts(feed.hosts).forEach { host ->
+            val extras = buildList {
+                host.pingMs?.let { add("${it.roundToInt()} ms") }
+                host.health?.let { add("health $it") }
+                addAll(host.issueTypes)
+                host.detail?.let(::add)
             }
-            version?.let {
-                listOfNotNull("Installed $it", build?.let { value -> "build $value" }).joinToString(" · ")
-            }
+            append("[${hostMarker(host)}] ${host.name} · ${host.platformLabel}")
+            if (extras.isNotEmpty()) append(" · ").append(extras.distinct().joinToString(" · "))
+            appendLine()
         }
-    }
-    ControlAction.LINUX_OS, ControlAction.RESTART_LINUX ->
-        hosts.firstOrNull { it.id == hostId }?.operatingSystem?.let { "Installed $it" }
-    ControlAction.REFRESH_HOSTS -> null
+    }.trimEnd()
 }
 
-private val ControlAction.platformScope: String?
-    get() = if (this == ControlAction.CODEX_MAC_APP) "macOS and Linux" else null
-
-internal val FleetHost.desktopAppPlatformLabel: String?
-    get() {
-        val raw = codexDesktopAppPlatform?.trim()?.takeIf(String::isNotEmpty)
-            ?: platform.trim().takeIf(String::isNotEmpty)
-            ?: return null
-        return raw.desktopAppPlatformLabel()
+/** Plain-text detail for one machine, for the share sheet. */
+internal fun hostSummary(host: FleetHost): String = buildString {
+    appendLine("${host.name} · ${host.platformLabel} · ${stateLabel(host)}")
+    host.detail?.let(::appendLine)
+    val rows = buildList {
+        host.operatingSystem?.let { add("System: $it") }
+        host.health?.let { add("Health: $it") }
+        host.pingMs?.let { add("Ping: ${it.roundToInt()} ms") }
+        host.jitterMs?.let { add("Jitter: ${formatDecimal(it)} ms") }
+        host.packetLossPercent?.let { add("Packet loss: ${formatDecimal(it)}%") }
+        host.sshReadyMs?.let { add("SSH ready: ${it.roundToInt()} ms") }
+        host.fullProbeMs?.let { add("Full probe: ${it.roundToInt()} ms") }
+        host.diskPercent?.let { add("Disk used: ${formatDecimal(it)}%") }
+        host.memoryPercent?.let { add("Memory used: ${formatDecimal(it)}%") }
+        host.loadAverage?.let { add("Load average: ${formatDecimal(it)}") }
+        host.bootDescription?.let { add("Boot: $it") }
+        host.codexCliVersion?.let { add("Codex CLI: $it") }
+        host.codexDesktopAppVersion?.let { add("ChatGPT Desktop App: $it") }
+        host.fleetlightVersion?.let { add("Fleetlight: $it") }
+        if (host.restartRequired) add("Restart: required")
+        if (host.issueTypes.isNotEmpty()) add("Signals: ${host.issueTypes.joinToString(", ")}")
+        if (host.services.isNotEmpty()) add("Services: ${host.services.joinToString { "${it.name} ${it.state}" }}")
+        if (host.warnings.isNotEmpty()) add("Warnings: ${host.warnings.joinToString { it.title }}")
+        host.checkedAt?.let { add("Checked: ${dateTime(it)}") }
     }
-
-private fun String.desktopAppPlatformLabel(): String? = when {
-    equals("unknown", ignoreCase = true) -> null
-    equals("macOS", ignoreCase = true) || equals("darwin", ignoreCase = true) -> "macOS"
-    contains("linux", ignoreCase = true) -> "Linux"
-    else -> take(32)
-}
-
-private val FleetHost.hasDesktopAppMetadata: Boolean
-    get() = codexDesktopAppPlatform != null ||
-        codexDesktopAppProvider != null ||
-        codexDesktopAppVersion != null ||
-        codexDesktopAppAvailableVersion != null ||
-        codexDesktopAppState != null ||
-        codexDesktopAppUpdateAvailable != null ||
-        codexDesktopAppCheckedAt != null
-
-private val ControlCapability.desktopAppKnownNotInstalled: Boolean
-    get() = codexDesktopAppState == CodexDesktopAppState.MISSING
-
-private val ControlCapability.desktopAppStateKnown: Boolean
-    get() = codexDesktopAppState != null || codexDesktopAppUpdateAvailable != null
-
-internal fun desktopAppFreshnessLabel(
-    action: ControlAction,
-    capability: ControlCapability,
-    host: FleetHost?,
-    now: Instant = Instant.now(),
-): String? {
-    if (action != ControlAction.CODEX_MAC_APP) return null
-    val checkedAt = capability.codexDesktopAppCheckedAt ?: host?.codexDesktopAppCheckedAt ?: return null
-    return "Checked ${relativeTime(checkedAt, now)}"
-}
-
-private val FleetHost.effectiveDesktopAppState: CodexDesktopAppState?
-    get() = codexDesktopAppState ?: when (codexDesktopAppUpdateAvailable) {
-        true -> CodexDesktopAppState.UPDATE_AVAILABLE
-        false -> CodexDesktopAppState.CURRENT
-        null -> null
-    }
-
-internal val FleetHost.desktopAppProviderLabel: String?
-    get() {
-        val raw = codexDesktopAppProvider?.trim()?.takeIf(String::isNotEmpty) ?: return null
-        return when {
-            raw.equals("macos-appcast", ignoreCase = true) -> "Signed macOS appcast"
-            raw.equals("linux-apt", ignoreCase = true) -> "OpenAI APT repository"
-            raw.equals("linux-pacman", ignoreCase = true) -> "Configured pacman repository"
-            else -> raw.take(80)
-        }
-    }
-
-private val app.fleetlight.mobile.data.ControlJobTarget.displayProgress: String
-    get() = when (state) {
-        app.fleetlight.mobile.data.ControlTargetState.ISSUING -> "Issuing restart"
-        app.fleetlight.mobile.data.ControlTargetState.WAITING_FOR_OFFLINE -> "Waiting to go offline"
-        app.fleetlight.mobile.data.ControlTargetState.WAITING_FOR_ONLINE -> "Waiting to return online"
-        app.fleetlight.mobile.data.ControlTargetState.VERIFYING -> "Verifying"
-        else -> phase?.replace(Regex("([a-z])([A-Z])"), "$1 $2")?.lowercase()
-            ?: state.name.lowercase().replace('_', ' ')
-    }
+    rows.forEach(::appendLine)
+}.trimEnd()
 
 @Preview(showBackground = true, widthDp = 412, heightDp = 860)
 @Composable
@@ -3030,8 +650,8 @@ private object DemoFeed {
         observer = FeedObserver(name = "Primary observer", appVersion = "1.0"),
         summary = FleetSummary(total = 3, online = 2, offline = 1, slowConnections = 1, updatesAvailable = 1),
         hosts = listOf(
-            FleetHost("workstation", "Design Workstation", "macOS", HostState.ONLINE, "online", pingMs = 8.0, health = 100),
-            FleetHost("server", "Media Server", "Linux", HostState.SLOW, "slow", issueTypes = listOf("High latency"), pingMs = 74.0, health = 91),
+            FleetHost("workstation", "Design Workstation", "macOS", HostState.ONLINE, "online", pingMs = 8.0, health = 100, diskPercent = 41.0, memoryPercent = 62.0),
+            FleetHost("server", "Media Server", "Linux", HostState.SLOW, "slow", issueTypes = listOf("High latency"), pingMs = 74.0, health = 91, diskPercent = 88.0),
             FleetHost("lab", "Lab Computer", "Linux", HostState.OFFLINE, "offline", detail = "Last reachable 18 minutes ago"),
         ),
         linuxUpdates = listOf(LinuxUpdate("server", "Media Server", "updates available", availableCount = 4)),

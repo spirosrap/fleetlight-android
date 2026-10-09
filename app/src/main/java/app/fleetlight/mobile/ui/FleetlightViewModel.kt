@@ -29,6 +29,8 @@ import app.fleetlight.mobile.data.isRetryableControlFailure
 import app.fleetlight.mobile.data.withCapabilityNames
 import app.fleetlight.mobile.data.FeedRefreshResult
 import app.fleetlight.mobile.data.FeedRepository
+import app.fleetlight.mobile.data.ObserverDisagreement
+import app.fleetlight.mobile.data.observerDisagreements
 import app.fleetlight.mobile.data.FileFeedCache
 import app.fleetlight.mobile.data.HttpsControlSource
 import app.fleetlight.mobile.data.HttpsFeedSource
@@ -77,6 +79,7 @@ data class FleetUiState(
     val updateCheckSubmitting: Boolean = false,
     val updateCheckError: String? = null,
     val checkSyncPending: Boolean = false,
+    val observerDisagreements: Map<String, List<ObserverDisagreement>> = emptyMap(),
 )
 
 internal fun controlJobBlockReason(state: FleetUiState, hasStoredJob: Boolean): String? {
@@ -828,6 +831,7 @@ class FleetlightViewModel(
             banner = banner,
             activeEndpoint = result.endpoint,
             refreshedAt = result.fetchedAt,
+            observerDisagreements = if (result.fromCache) emptyMap() else observerDisagreements(result.feed, result.observerViews),
         )
         if (!result.fromCache) mutableState.value.controlEndpoint?.let(::checkControl)
     }

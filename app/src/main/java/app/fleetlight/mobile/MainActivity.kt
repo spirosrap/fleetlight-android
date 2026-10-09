@@ -6,14 +6,20 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.fleetlight.mobile.data.EndpointPolicy
 import app.fleetlight.mobile.data.ControlEndpointPolicy
 import app.fleetlight.mobile.data.PendingPairing
 import app.fleetlight.mobile.ui.FleetlightApp
 import app.fleetlight.mobile.ui.FleetlightViewModel
+import app.fleetlight.mobile.ui.theme.AppearancePreferences
 import app.fleetlight.mobile.ui.theme.FleetlightTheme
+import app.fleetlight.mobile.ui.theme.ThemeMode
 
 class MainActivity : ComponentActivity() {
     private var viewModel: FleetlightViewModel? = null
@@ -28,7 +34,14 @@ class MainActivity : ComponentActivity() {
         pendingPairing = configuredPairing(initialUri)
         intent.data = null
         setContent {
-            FleetlightTheme {
+            val appearance = remember { AppearancePreferences.get(applicationContext) }
+            val appearanceSettings by appearance.settings.collectAsStateWithLifecycle()
+            val darkTheme = when (appearanceSettings.themeMode) {
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+            }
+            FleetlightTheme(darkTheme = darkTheme, dynamicColor = appearanceSettings.wallpaperColors) {
                 val model: FleetlightViewModel = viewModel(factory = FleetlightViewModel.factory(application))
                 viewModel = model
                 LaunchedEffect(model) {
@@ -40,7 +53,11 @@ class MainActivity : ComponentActivity() {
                         model.stagePairing(pairing.endpoint, pairing.code)
                     }
                 }
-                FleetlightApp(model)
+                FleetlightApp(
+                    viewModel = model,
+                    appearance = appearanceSettings,
+                    onAppearanceChange = appearance::update,
+                )
             }
         }
     }

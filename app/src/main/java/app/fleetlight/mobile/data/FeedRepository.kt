@@ -28,6 +28,8 @@ sealed interface FeedRefreshResult {
         val fromCache: Boolean,
         val fetchedAt: Instant,
         val endpointFailures: List<String> = emptyList(),
+        /** Every endpoint that answered with a valid feed this cycle, freshest first, including the chosen one. */
+        val observerViews: List<ObserverView> = emptyList(),
     ) : FeedRefreshResult
 
     data object NoEndpoints : FeedRefreshResult
@@ -72,12 +74,16 @@ class FeedRepository(
         if (freshest != null) {
             val savedAt = now()
             cache.write(CachedFeed(freshest.raw, freshest.endpoint, savedAt))
+            val views = attempts.filterIsInstance<EndpointAttempt.Success>()
+                .sortedByDescending { it.feed.generatedAt }
+                .map { ObserverView.from(it.endpoint, it.feed) }
             return FeedRefreshResult.Success(
                 feed = freshest.feed,
                 endpoint = freshest.endpoint,
                 fromCache = false,
                 fetchedAt = savedAt,
                 endpointFailures = failures,
+                observerViews = views,
             )
         }
 

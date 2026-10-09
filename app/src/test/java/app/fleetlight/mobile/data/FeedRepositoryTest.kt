@@ -26,6 +26,8 @@ class FeedRepositoryTest {
         assertEquals("https://two.example/feed", result.endpoint)
         assertFalse(result.fromCache)
         assertEquals(newer, cache.value?.raw)
+        assertEquals(listOf("Newer", "Older"), result.observerViews.map { it.observerName })
+        assertEquals("https://one.example/feed", result.observerViews.last().endpoint)
     }
 
     @Test

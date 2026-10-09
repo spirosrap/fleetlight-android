@@ -6,6 +6,10 @@ This repository is the sanitized public edition. It contains no fleet names, add
 
 ## Highlights
 
+- Refreshed visual design (1.16): Fleetlight brand palette with light, dark and optional wallpaper (Material You) colours, a fleet overview card with an online ring and signal tiles, status rails on machine cards, and grouped machine details with disk and memory bars
+- Fleet search, filters (Issues, Pinned, macOS, Linux) and sorting (Priority, Name, Latency, Health), plus pull-to-refresh
+- Share a plain-text fleet summary or a single machine's details from the share sheet; jump from a machine straight to its Trends
+- Events grouped by day with a needs-attention filter
 - Native Kotlin and Jetpack Compose Material 3 interface with light, dark, and dynamic color
 - Issue-first Fleet view with separate Offline, Slow, Access, Alert, Update, and Restart signals
 - Pinned-machine priority with a visible pin marker while preserving issue ordering within each priority group
@@ -28,7 +32,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - `fleetlight://configure` endpoint links without compiling private addresses into the app
 - Optional stable release signing from an ignored properties file or environment variables
 
-- Version: **1.15.6 (28)**
+- Version: **1.16.0 (29)**
 - Application ID: `app.fleetlight.mobile`
 - Minimum Android: 8.0 / API 26
 - Compile and target SDK: 36

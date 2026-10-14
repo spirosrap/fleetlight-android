@@ -36,8 +36,8 @@ android {
         applicationId = "app.fleetlight.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 31
-        versionName = "1.16.2"
+        versionCode = 32
+        versionName = "1.16.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

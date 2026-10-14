@@ -113,6 +113,23 @@ internal fun FleetFilter.matches(host: FleetHost): Boolean = when (this) {
     FleetFilter.LINUX -> host.isLinux
 }
 
+private val HEALTHY_SERVICE_STATES = setOf("running", "active", "ok", "online", "healthy", "up", "enabled", "unsupported")
+
+/**
+ * One line naming why a host needs attention. Degraded services and warnings carry the actual
+ * reason (for example "Tailscale: Login expires within 7 days"), so they come first; the feed's
+ * generic issue types such as "alerts" are only shown when nothing more specific is available.
+ */
+internal fun hostIssueLine(host: FleetHost): String {
+    val serviceReasons = host.services
+        .filter { it.state.trim().lowercase() !in HEALTHY_SERVICE_STATES }
+        .map { service -> service.detail?.let { "${service.name}: $it" } ?: "${service.name} ${service.state.trim().lowercase()}" }
+    val warningReasons = host.warnings.map { warning -> warning.detail?.let { "${warning.title}: $it" } ?: warning.title }
+    val specific = (serviceReasons + warningReasons).distinct()
+    val parts = if (specific.isNotEmpty()) specific + listOfNotNull(host.detail) else host.issueTypes + listOfNotNull(host.detail)
+    return parts.distinct().joinToString(" · ")
+}
+
 internal fun hostMatchesQuery(host: FleetHost, query: String): Boolean {
     val needle = query.trim().lowercase()
     if (needle.isEmpty()) return true
@@ -589,7 +606,7 @@ internal fun HostCard(
                             if (host.restartRequired) MiniMetric("Restart", "required", MaterialTheme.colorScheme.tertiary)
                         }
                     }
-                    val issueLine = (host.issueTypes + listOfNotNull(host.detail)).distinct().joinToString(" · ")
+                    val issueLine = hostIssueLine(host)
                     if (issueLine.isNotBlank()) {
                         Text(
                             issueLine,

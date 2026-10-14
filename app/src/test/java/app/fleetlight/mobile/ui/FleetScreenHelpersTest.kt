@@ -4,6 +4,8 @@ import app.fleetlight.mobile.data.FeedObserver
 import app.fleetlight.mobile.data.FleetHost
 import app.fleetlight.mobile.data.FleetIncident
 import app.fleetlight.mobile.data.FleetSummary
+import app.fleetlight.mobile.data.HostService
+import app.fleetlight.mobile.data.HostWarning
 import app.fleetlight.mobile.data.HostState
 import app.fleetlight.mobile.data.MobileFeed
 import java.time.Instant
@@ -23,6 +25,26 @@ class FleetScreenHelpersTest {
         FleetHost("c", "Charlie", "Linux", HostState.ONLINE, "online", pingMs = 5.0, health = 100, isPinned = true),
         FleetHost("d", "Delta", "macOS", HostState.SLOW, "slow", issueTypes = listOf("High latency"), pingMs = 120.0, health = 70),
     )
+
+    @Test
+    fun `issue line names degraded services before generic issue types`() {
+        val host = FleetHost(
+            "chris", "ChrisSrv", "Linux", HostState.ATTENTION, "attention",
+            detail = "Root disk 17% used",
+            issueTypes = listOf("alerts"),
+            services = listOf(
+                HostService("tailscale", "Tailscale", "degraded", "Login expires within 7 days"),
+                HostService("service", "docker", "active"),
+            ),
+        )
+        assertEquals("Tailscale: Login expires within 7 days · Root disk 17% used", hostIssueLine(host))
+        val warned = host.copy(services = emptyList(), warnings = listOf(HostWarning(title = "Battery", detail = "12% left")))
+        assertEquals("Battery: 12% left · Root disk 17% used", hostIssueLine(warned))
+        val stopped = host.copy(services = listOf(HostService("service", "sshd", "failed")), detail = null)
+        assertEquals("sshd failed", hostIssueLine(stopped))
+        assertEquals("alerts · Root disk 17% used", hostIssueLine(host.copy(services = emptyList())))
+        assertEquals("", hostIssueLine(FleetHost("a", "Alpha", "macOS", HostState.ONLINE, "online")))
+    }
 
     @Test
     fun `priority is issues first then name, ignoring observer pins`() {

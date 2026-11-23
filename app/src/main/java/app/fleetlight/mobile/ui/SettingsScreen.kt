@@ -77,7 +77,7 @@ internal fun SettingsScreen(
     ) {
         SectionHeading("Settings", "Sources, controller pairing and appearance")
 
-        SettingsGroup(icon = Icons.Outlined.Link, title = "Feed endpoints", subtitle = "Every endpoint is tried; the freshest valid feed wins") {
+        SettingsGroup(icon = Icons.Outlined.Link, title = "Feed endpoints", subtitle = "Every endpoint is tried; the app stays with one live observer") {
             drafts.forEachIndexed { index, value ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
@@ -224,7 +224,7 @@ internal fun SettingsScreen(
             InfoRow(
                 icon = Icons.Outlined.Storage,
                 title = "Resilient refresh",
-                text = "All endpoints are checked every 60 seconds. The freshest schema 1 feed wins, and the last good response stays available offline.",
+                text = "All endpoints are checked every 60 seconds. The app shows one live observer and moves to another only when that one stops or falls behind. The last good response stays available offline.",
             )
             InfoRow(
                 icon = Icons.Outlined.AccessTime,

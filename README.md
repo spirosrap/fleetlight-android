@@ -24,7 +24,7 @@ This repository is the sanitized public edition. It contains no fleet names, add
 - Read-only fleet-wide and per-machine rechecks, including offline targets, without installing or restarting anything
 - Read-only recent operation receipts with timestamps and per-machine outcomes from the paired controller journal
 - Read-only status and Events remain available without command pairing
-- Up to four runtime-configured HTTPS endpoints; the freshest valid schema 1 response wins
+- Up to four runtime-configured HTTPS endpoints, Mac or Linux observers; the app shows one live observer and moves to another only when that one stops answering or falls more than 150 seconds behind
 - Lightweight fleet-snapshot refresh every 60 seconds, manual snapshot refresh, serialized crash-safe atomic last-good caching, and clear stale/offline state
 - Controller-owned machine membership, so additions and confirmed removals from the Mac machine manager appear automatically after the next verified live feed
 - Safe retry of transient controller timeouts and rate limits using the original idempotency identity

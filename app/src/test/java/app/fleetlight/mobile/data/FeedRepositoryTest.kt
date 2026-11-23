@@ -31,6 +31,90 @@ class FeedRepositoryTest {
     }
 
     @Test
+    fun staysWithTheObserverOnScreenWhileItKeepsUp() = runTest {
+        var mac = feedJson("2026-01-01T00:01:00Z", "Mac")
+        var linux = feedJson("2026-01-01T00:00:40Z", "Linux")
+        var macAnswers = true
+        val repository = FeedRepository(
+            source = FeedSource { endpoint ->
+                if (endpoint.contains("mac")) { if (macAnswers) mac else error("HTTP 502") } else linux
+            },
+            cache = MemoryCache(),
+            now = { Instant.parse("2026-01-01T00:10:00Z") },
+        )
+        val endpoints = listOf("https://mac.example/feed", "https://linux.example/feed")
+        suspend fun shown() = (repository.refresh(endpoints) as FeedRefreshResult.Success).feed.observer.name
+
+        assertEquals("Mac", shown())
+
+        // The other observer checked more recently; the one on screen is still current.
+        linux = feedJson("2026-01-01T00:01:40Z", "Linux")
+        assertEquals("Mac", shown())
+        mac = feedJson("2026-01-01T00:02:00Z", "Mac")
+        assertEquals("Mac", shown())
+
+        // It stopped checking: the live observer takes over once the gap is more than a missed check.
+        linux = feedJson("2026-01-01T00:04:30Z", "Linux")
+        assertEquals("Mac", shown())
+        linux = feedJson("2026-01-01T00:04:31Z", "Linux")
+        assertEquals("Linux", shown())
+
+        // And the phone stays there, even when the first one is back and newer.
+        mac = feedJson("2026-01-01T00:05:00Z", "Mac")
+        assertEquals("Linux", shown())
+
+        // The other observer going away changes nothing.
+        linux = feedJson("2026-01-01T00:06:00Z", "Linux")
+        mac = feedJson("2026-01-01T00:06:10Z", "Mac")
+        assertEquals("Linux", shown())
+        macAnswers = false
+        assertEquals("Linux", shown())
+    }
+
+    @Test
+    fun leavesAnObserverThatStopsAnswering() = runTest {
+        var macAnswers = true
+        val repository = FeedRepository(
+            source = FeedSource { endpoint ->
+                when {
+                    endpoint.contains("linux") -> feedJson("2026-01-01T00:00:30Z", "Linux")
+                    macAnswers -> feedJson("2026-01-01T00:01:00Z", "Mac")
+                    else -> error("HTTP 502")
+                }
+            },
+            cache = MemoryCache(),
+            now = { Instant.parse("2026-01-01T00:10:00Z") },
+        )
+        val endpoints = listOf("https://mac.example/feed", "https://linux.example/feed")
+
+        assertEquals("Mac", (repository.refresh(endpoints) as FeedRefreshResult.Success).feed.observer.name)
+        macAnswers = false
+        val result = repository.refresh(endpoints) as FeedRefreshResult.Success
+        assertEquals("Linux", result.feed.observer.name)
+        assertFalse(result.fromCache)
+    }
+
+    @Test
+    fun remembersTheObserverOnScreenAcrossAnAppRestart() = runTest {
+        val cache = MemoryCache(
+            CachedFeed(feedJson("2026-01-01T00:00:00Z", "Linux"), "https://linux.example/feed", Instant.parse("2026-01-01T00:00:05Z")),
+        )
+        val repository = FeedRepository(
+            source = FeedSource { endpoint ->
+                if (endpoint.contains("mac")) feedJson("2026-01-01T00:01:00Z", "Mac") else feedJson("2026-01-01T00:00:40Z", "Linux")
+            },
+            cache = cache,
+            now = { Instant.parse("2026-01-01T00:10:00Z") },
+        )
+
+        val result = repository.refresh(listOf("https://mac.example/feed", "https://linux.example/feed"))
+            as FeedRefreshResult.Success
+
+        assertEquals("Linux", result.feed.observer.name)
+        assertEquals(listOf("Mac", "Linux"), result.observerViews.map { it.observerName })
+    }
+
+    @Test
     fun oneFailedEndpointDoesNotTurnAValidFailoverFeedIntoAnError() = runTest {
         val live = feedJson("2026-01-01T00:01:00Z", "Live observer")
         val repository = FeedRepository(

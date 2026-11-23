@@ -46,6 +46,9 @@ class FeedRepository(
     private val parser: FeedParser = FeedParser(),
     private val now: () -> Instant = Instant::now,
 ) {
+    /** The endpoint whose feed was shown last; null until a refresh or the cache says which. */
+    private var shownEndpoint: String? = null
+
     suspend fun refresh(rawEndpoints: List<String>): FeedRefreshResult {
         val endpoints = EndpointPolicy.normalizeAll(rawEndpoints)
         if (endpoints.isEmpty()) {
@@ -69,12 +72,14 @@ class FeedRepository(
 
         val failures = attempts.filterIsInstance<EndpointAttempt.Failure>()
             .map { "${it.endpoint}: ${it.message}" }
-        val freshest = attempts.filterIsInstance<EndpointAttempt.Success>()
-            .maxByOrNull { it.feed.generatedAt }
-        if (freshest != null) {
+        val successes = attempts.filterIsInstance<EndpointAttempt.Success>()
+        val newest = successes.maxByOrNull { it.feed.generatedAt }
+        if (newest != null) {
+            val freshest = steadyChoice(successes, newest)
             val savedAt = now()
             cache.write(CachedFeed(freshest.raw, freshest.endpoint, savedAt))
-            val views = attempts.filterIsInstance<EndpointAttempt.Success>()
+            shownEndpoint = freshest.endpoint
+            val views = successes
                 .sortedByDescending { it.feed.generatedAt }
                 .map { ObserverView.from(it.endpoint, it.feed) }
             return FeedRefreshResult.Success(
@@ -107,6 +112,22 @@ class FeedRepository(
         )
     }
 
+    /**
+     * Stays with the observer already on screen while it keeps up with the newest one. Observers
+     * check on their own clocks, so the newest feed changes hands from one refresh to the next;
+     * following it would swap machine names and numbers every minute. The observer on screen is
+     * left only when it stops answering or falls behind a live one.
+     */
+    private suspend fun steadyChoice(
+        successes: List<EndpointAttempt.Success>,
+        newest: EndpointAttempt.Success,
+    ): EndpointAttempt.Success {
+        val shown = shownEndpoint ?: cache.read()?.endpoint ?: return newest
+        val current = successes.firstOrNull { it.endpoint == shown } ?: return newest
+        val behind = Duration.between(current.feed.generatedAt, newest.feed.generatedAt)
+        return if (behind <= STEADY_TOLERANCE) current else newest
+    }
+
     private suspend fun cachedOr(
         fallback: FeedRefreshResult,
         failures: List<String>,
@@ -135,5 +156,8 @@ class FeedRepository(
 
     private companion object {
         val MAX_FUTURE_SKEW: Duration = Duration.ofMinutes(5)
+
+        /** One missed check on a one-minute cycle is not falling behind; a stopped observer is. */
+        val STEADY_TOLERANCE: Duration = Duration.ofSeconds(150)
     }
 }
